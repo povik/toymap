@@ -980,15 +980,17 @@ struct Network {
 		}
 	}
 
-	static void ref_cut(AndNode *node)
+	static int ref_cut(AndNode *node)
 	{
+		int sum = 0;
 		if (!node->pi)
 		for (auto cut_node : CutList{node->cut}) {
 			log_assert(cut_node.img != node);
 			if (!cut_node.img->map_fanouts++)
-				ref_cut(cut_node.img);
+				sum += 1 + ref_cut(cut_node.img);
 			log_assert(cut_node.img->map_fanouts >= 1);
 		}
+		return sum;
 	}
 
 	template<typename CutEvaluation>
@@ -1257,20 +1259,24 @@ struct Network {
 				exact_area = calc_exact_area(cutlist, node);
 			}
 
-			static int calc_exact_area(CutList cutlist, AndNode *node,
-									   bool root=true) {
+			static int calc_exact_area(CutList cutlist, AndNode *node) {
 				if (node->pi)
 					return 0;
-				int ret = 1;
+				int ret;
 
-				if (root && node->map_fanouts)
+				if (node->map_fanouts)
 					deref_cut(node);
 
+				ret = 1;
 				for (auto cut_node : cutlist)
-				if (!cut_node.img->map_fanouts)
-					ret += calc_exact_area(cut_node.img->cut, cut_node.img, false);
+				if (!cut_node.img->map_fanouts++)
+					ret += 1 + ref_cut(cut_node.img);
 
-				if (root && node->map_fanouts)
+				for (auto cut_node : cutlist)
+				if (!--cut_node.img->map_fanouts)
+					deref_cut(cut_node.img);
+
+				if (node->map_fanouts)
 					ref_cut(node);
 
 				return ret;
