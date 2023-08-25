@@ -1127,8 +1127,8 @@ struct Network {
 					leaderboard[working_eval] = slot = lcache->ps_len++;
 				} else {
 					// Post the new cut on the leaderboard, and if that sinks one
-					// of the earlier cached cuts sink below the cutoff, reuse the
-					// slot in the `lcache->ps` array for the new cut
+					// of the earlier cached cuts below the cutoff, reuse the slot
+					// in the `lcache->ps` array for the new cut
 					leaderboard[working_eval] = -1;
 					slot = (leaderboard.rbegin())->second;
 					leaderboard.erase(std::prev(leaderboard.end()));
