@@ -68,13 +68,13 @@ proc bench {name extra} {
 
 bench "arithmetic/adder.aig" {}
 bench "arithmetic/bar.aig" {}
-bench "arithmetic/div.aig" {-no_exact_area}
+bench "arithmetic/div.aig" {}
 bench "arithmetic/hyp.aig" {}
 bench "arithmetic/log2.aig" {}
 bench "arithmetic/max.aig" {}
 bench "arithmetic/multiplier.aig" {}
 bench "arithmetic/sin.aig" {}
-bench "arithmetic/sqrt.aig" {-no_exact_area}
+bench "arithmetic/sqrt.aig" {}
 bench "arithmetic/square.aig" {}
 
 bench "random_control/arbiter.aig" {}
@@ -84,6 +84,6 @@ bench "random_control/dec.aig" {}
 bench "random_control/i2c.aig" {}
 bench "random_control/int2float.aig" {}
 bench "random_control/mem_ctrl.aig" {}
-bench "random_control/priority.aig" {-no_exact_area}
+bench "random_control/priority.aig" {}
 bench "random_control/router.aig" {}
 bench "random_control/voter.aig" {}
