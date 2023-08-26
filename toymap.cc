@@ -961,12 +961,15 @@ struct Network {
 	void trivial_cuts()
 	{
 		for (auto node : nodes) {
+			node->map_fanouts = 0;
 			int pos = 0;
 			for (auto fanin : CoverNode{0, node}.fanins())
 				node->cut[pos++] = fanin;
 			if (pos < CUT_MAXIMUM)
 				node->cut[pos].img = NULL;
 		}
+
+		walk_mapping();
 	}
 
 	static void deref_cut(AndNode *node)
