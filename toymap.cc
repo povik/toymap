@@ -572,10 +572,7 @@ struct Network {
 		for (auto cell : m->cells())
 		if (!known_cells.count(cell->type))
 		for (auto &conn : cell->connections_) {
-			// We apply sigmap to all cell connections to
-			// simplify the wire removal logic later on
-			sigmap.apply(conn.second);
-			for (auto bit : conn.second)
+			for (auto bit : sigmap(conn.second))
 			if (bit.wire) {
 				wire_nodes.at(bit)->has_foreign_cell_users = true;
 				log_assert(wire_nodes.at(bit)->yw.wire);
@@ -641,26 +638,6 @@ struct Network {
 		for (auto node : nodes)
 		if (node->has_foreign_cell_users && node->visited && !node->po)
 			node->pi = true;
-
-		if (inplace) {
-			// Clear wires except for outer ports and wires
-			// having foreign cell users
-			Yosys::pool<RTLIL::Wire *> wires_to_remove;
-			for (auto wire : m->wires()) {
-				bool used = false;
-				for (auto bit : sigmap(wire))
-				if (bit.wire) {
-					log_assert(wire_nodes.count(bit));
-					AndNode *node = wire_nodes.at(bit);
-					if (node->has_foreign_cell_users || node->pi || node->po)
-						used = true;
-				}
-				if (used || wire->port_input || wire->port_output) continue;
-				wires_to_remove.insert(wire);
-			}
-
-			m->remove(wires_to_remove);
-		}
 
 		clean(false);
 		compact();
