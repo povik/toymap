@@ -1169,17 +1169,66 @@ struct Network {
 		int cut_width;
 		int area_flow;
 
-		DepthEval(CutList cutlist, AndNode *node)
+		DepthEval(CutList cutlist, AndNode *node, bool area_flow2=false)
 		{
 			depth = 0;
 			cut_width = 0;
-			area_flow = 100;
 			for (auto cut_node : cutlist) {
 				depth = std::max(depth, cut_node.img->depth + 1);
-				area_flow += cut_node.img->area_flow;
 				cut_width++;
 			}
+
+			if (area_flow2) {
+				area_flow = compute_area_flow(cutlist, node);
+			} else {
+				area_flow = 100;
+				for (auto cut_node : cutlist)
+					area_flow += cut_node.img->area_flow;
+				area_flow /= std::max(1, node->map_fanouts);
+			}
+		}
+
+		static int compute_area_flow(CutList cutlist, AndNode *node, bool top=true)
+		{
+			int area_flow = 100;
+
+			if (node->visited || node->pi)
+				return 0;
+
+			node->visited = true;
+
+			for (auto cut_node : cutlist) {
+				if (cut_node.img->visited)
+					continue;
+
+				if (!cut_node.img->map_fanouts) {
+					area_flow += compute_area_flow(CutList{cut_node.img->cut}, cut_node.img, false);
+				} else {
+					cut_node.img->visited = true;
+					area_flow += cut_node.img->area_flow;
+				}
+			}
 			area_flow /= std::max(1, node->map_fanouts);
+
+			if (top)
+				clear_area_flow_visited(cutlist, node);
+
+			return area_flow;
+		}
+
+		static void clear_area_flow_visited(CutList cutlist, AndNode *node)
+		{
+			if (!node->visited || node->pi)
+				return;
+
+			for (auto cut_node : cutlist) {
+				if (!cut_node.img->map_fanouts)
+					clear_area_flow_visited(CutList{cut_node.img->cut}, cut_node.img);
+				else
+					cut_node.img->visited = false;
+			}
+
+			node->visited = false;
 		}
 
 		bool operator<(const DepthEval other) const
@@ -1195,6 +1244,27 @@ struct Network {
 		bool operator<(const DepthEval2 other) const
 			{ return std::tie(depth, area_flow, cut_width)
 						< std::tie(other.depth, other.area_flow, other.cut_width); }
+	};
+
+	struct DepthEvalFirst : public DepthEval {
+		DepthEvalFirst(CutList cutlist, AndNode *node)
+			: DepthEval(cutlist, node, false)
+		{
+			depth = 0;
+			cut_width = 0;
+			area_flow = 100;
+			for (auto cut_node : cutlist) {
+				depth = std::max(depth, cut_node.img->depth + 1);
+				area_flow += cut_node.img->area_flow;
+				cut_width++;
+			}
+
+			area_flow /= std::max(1, node->map_fanouts);
+		}
+
+		bool operator<(const DepthEval other) const
+			{ return std::tie(depth, cut_width, area_flow)
+						< std::tie(other.depth, other.cut_width, other.area_flow); }
 	};
 
 	struct AreaFlowEval : public DepthEval {
@@ -1258,9 +1328,10 @@ struct Network {
 			node->depth = 0;
 			node->area_flow = 0;
 			node->map_fanouts = 0;
+			node->visited = false;
 		}
 
-		cuts<DepthEval>(false);
+		cuts<DepthEvalFirst>(false);
 
 		// `map_fanouts` is a reference counter on each AIG node for the number of times
 		// that node is used as a fanin in the current mapping draft. Now when the initial cuts
