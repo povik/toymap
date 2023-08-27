@@ -219,6 +219,7 @@ struct AndNode {
 			CoverNode cut[CUT_MAXIMUM];	
 			int area_flow;
 			int map_fanouts;
+			int fanouts;
 		};
 		bool has_foreign_cell_users;
 		int timedelta;
@@ -1225,7 +1226,13 @@ struct Network {
 
 	struct DepthEvalInitial : public DepthEval {
 		DepthEvalInitial(CutList cutlist, AndNode *node)
-			: DepthEval(cutlist, node, false) {}
+			: DepthEval(cutlist, node, false)
+		{
+			area_flow = 100;
+			for (auto cut_node : cutlist)
+				area_flow += cut_node.img->area_flow;
+			area_flow /= std::max(1, node->fanouts);
+		}
 	};
 
 	struct AreaFlowEval : public DepthEval {
@@ -1289,7 +1296,15 @@ struct Network {
 			node->depth = 0;
 			node->area_flow = 0;
 			node->map_fanouts = 0;
+			node->fanouts = 0;
 			node->visited = false;
+		}
+
+		for (auto node : nodes) {
+			if (node->po)
+				node->fanouts++;
+			for (auto fanin : node->fanins())
+				fanin->fanouts++;
 		}
 
 		cuts<DepthEvalInitial>(false);
