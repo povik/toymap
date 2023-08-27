@@ -852,7 +852,6 @@ struct Network {
 
 		int area = 0, support_area = 0;
 		for (auto node : nodes) {
-			log_assert(!node->po || (node->ins[0].node && node->ins[1].is_const()));
 			if (node->pi || node->po)
 				continue;
 			if (node->map_fanouts)
@@ -945,6 +944,7 @@ struct Network {
 	void cuts(bool consider_previous_cut=true)
 	{
 		log_assert(max_cut <= CUT_MAXIMUM);
+		log_assert(CUT_MAXIMUM >= 3);
 		struct NodeCache {
 			int ps_len;
 			struct PriorityCut {
@@ -988,8 +988,10 @@ struct Network {
 				lcache->ps_len = 0;
 
 				// Selected cut is the trivial one
-				node->cut[0] = CoverNode{0, node->ins[0].node};
-				node->cut[1] = CoverNode{0, NULL};
+				int cutlen = 0;
+				for (auto fanin : CoverNode{0, node}.fanins())
+					node->cut[cutlen++] = fanin;
+				node->cut[cutlen] = CoverNode{0, NULL};
 				continue;
 			}
 
@@ -1231,19 +1233,16 @@ struct Network {
 						< std::tie(other.exact_area, other.cut_width, other.depth); }
 	};
 
-	void spread_depth_limit(int po_depth)
+	void spread_depth_limit(int overall_depth)
 	{
 		for (auto node : nodes)
-			node->depth_limit = std::numeric_limits<int>::max();
+			node->depth_limit = node->po ? overall_depth + 1 
+									: std::numeric_limits<int>::max();
 		for (auto it = nodes.rbegin(); it != nodes.rend(); it++) {
-			if ((*it)->po) {
-				(*it)->po_fanin()->depth_limit = po_depth;
-			} else {
-				for (auto cut_fanin : CutList{(*it)->cut})
-					cut_fanin.img->depth_limit =
-							std::min(cut_fanin.img->depth_limit,
-							 		 (*it)->depth_limit - 1);
-			}
+			for (auto cut_fanin : CutList{(*it)->cut})
+				cut_fanin.img->depth_limit =
+						std::min(cut_fanin.img->depth_limit,
+						 		 (*it)->depth_limit - 1);
 		}
 	}
 
@@ -1283,7 +1282,8 @@ struct Network {
 		int target_depth = 0;
 		for (auto node : nodes)
 		if (node->po)
-			target_depth = std::max(target_depth, node->po_fanin()->depth);
+		for (auto fanin : node->fanins())
+			target_depth = std::max(target_depth, fanin->depth);
 		log("Mapping: Depth will be %d\n", target_depth);
 
 		// Call `walk_mapping()` again to print the current area
