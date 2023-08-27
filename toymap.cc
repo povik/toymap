@@ -1223,25 +1223,9 @@ struct Network {
 						< std::tie(other.depth, other.area_flow, other.cut_width); }
 	};
 
-	struct DepthEvalFirst : public DepthEval {
-		DepthEvalFirst(CutList cutlist, AndNode *node)
-			: DepthEval(cutlist, node, false)
-		{
-			depth = 0;
-			cut_width = 0;
-			area_flow = 100;
-			for (auto cut_node : cutlist) {
-				depth = std::max(depth, cut_node.img->depth + 1);
-				area_flow += cut_node.img->area_flow;
-				cut_width++;
-			}
-
-			area_flow /= std::max(1, node->map_fanouts);
-		}
-
-		bool operator<(const DepthEval other) const
-			{ return std::tie(depth, cut_width, area_flow)
-						< std::tie(other.depth, other.cut_width, other.area_flow); }
+	struct DepthEvalInitial : public DepthEval {
+		DepthEvalInitial(CutList cutlist, AndNode *node)
+			: DepthEval(cutlist, node, false) {}
 	};
 
 	struct AreaFlowEval : public DepthEval {
@@ -1308,7 +1292,7 @@ struct Network {
 			node->visited = false;
 		}
 
-		cuts<DepthEvalFirst>(false);
+		cuts<DepthEvalInitial>(false);
 
 		// `map_fanouts` is a reference counter on each AIG node for the number of times
 		// that node is used as a fanin in the current mapping draft. Now when the initial cuts
