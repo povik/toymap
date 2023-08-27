@@ -229,14 +229,6 @@ struct AndNode {
 	int fid; // frontier index
 	int depth;
 
-	AndNode *po_fanin()
-	{
-		log_assert(po);
-		log_assert(ins[1].is_const() && ins[1].eval() == 1);
-		log_assert(ins[0].node);
-		return ins[0].node;
-	}
-
 	std::vector<bool> truth_table()
 	{
 		return truth_table(CutList{cut, 0});
