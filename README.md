@@ -16,7 +16,7 @@ Some features:
 
 ## Build
 
-    yosys-config --build toymap.so toymap.cc lutdepth.cc
+    yosys-config --build toymap.so toymap.cc lutdepth.cc post.cc
 
 ## References
 

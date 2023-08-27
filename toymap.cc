@@ -1465,17 +1465,21 @@ struct ToymapPass : Pass {
 			net.no_exact_area = no_exact_area;
 			net.yosys_import(m, import_ff);
 			bool emitted = false;
+			bool lut_post = false;
 			for (auto cmd : commands) {
 				if      (cmd == "-trivial_cuts")  net.trivial_cuts();
 				else if (cmd == "-scramble_lag")  net.scramble_lag();
 				else if (cmd == "-depth_cuts")    net.depth_cuts();
 				else if (cmd == "-dump_cuts")     net.dump_cuts();
-				else if (cmd == "-emit_luts")   { net.emit_luts(m); emitted = true; }
+				else if (cmd == "-emit_luts")   { net.emit_luts(m); emitted = true; lut_post = true; }
 				else if (cmd == "-emit_gate2")  { net.emit_luts(m, true); emitted = true; }
 				else log_error("Unknown command: %s\n", cmd.c_str());
  			}
  			if (!emitted)
  				net.yosys_export(m);
+
+ 			if (lut_post)
+ 				Pass::call(d, "lutnot");
 		}
 	}
 } ToymapPass;
