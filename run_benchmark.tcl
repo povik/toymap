@@ -1,6 +1,11 @@
 yosys -import
 
 proc lutarea {} {
+	# In some edge cases toymap can leave behind a NOT gate which
+	# might need to be converted into a single-input LUT in an
+	# actual implementation of the network. Do that here so we
+	# have a fair comparison of the LUT counts.
+	techmap -map +/gate2lut.v -D LUT_WIDTH=1
 	set stat [yosys tee -q -s result.json stat -json]
 	return [dict get $stat modules \\top num_cells_by_type \$lut]
 }
