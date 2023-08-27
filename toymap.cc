@@ -452,8 +452,6 @@ bool AndNode::expand()
 
 struct Network {
 	std::vector<AndNode*> nodes;
-	std::map<RTLIL::IdString, std::vector<AndNode *>> outputs;
-	std::map<RTLIL::IdString, std::vector<AndNode *>> inputs;
 	bool impure_module = false;
 	int frontier_size = 0;
 	int max_cut = 0;
@@ -468,17 +466,14 @@ struct Network {
 	Network (const Network&) = delete;
 	Network& operator= (const Network&) = delete;
 	Network(Network&& other) {
-		other.nodes.swap(nodes);
-		other.outputs.swap(outputs);
-		other.inputs.swap(inputs);
+
 		impure_module = other.impure_module;
 		frontier_size = other.frontier_size;
 		max_cut = other.max_cut;
 		no_exact_area = other.no_exact_area;
 	}
 
-	void yosys_import(RTLIL::Module *m, bool inplace=true,
-					  bool import_ff=false)
+	void yosys_import(RTLIL::Module *m, bool import_ff=false)
 	{
 		Yosys::SigMap sigmap(m);
 
@@ -526,12 +521,10 @@ struct Network {
 				nodes.push_back(node);
 			}
 
-			if (inplace) {
-				if (wire->port_input)
-					node->pi = true;
-				if (wire->port_output)
-					node->has_foreign_cell_users = true;
-			}
+			if (wire->port_input)
+				node->pi = true;
+			if (wire->port_output)
+				node->has_foreign_cell_users = true;
 
 			if (bit.wire->width == 1)
 				node->combine_label(bit.wire->name);
@@ -540,36 +533,12 @@ struct Network {
 						bit.wire->name.c_str(), bit.offset));
 		}
 
-		// Copy in the module signature if not running
-		// in the inplace mode
-		if (!inplace)
-		for (auto id : m->ports) {
-			RTLIL::Wire *wire = m->wire(id);
-			if (wire->port_output) {
-				std::vector<AndNode*> &outvec = outputs[wire->name];
-				for (auto bit : sigmap(wire)) {
-					node = wire_nodes.at(bit);
-					outvec.push_back(node);
-					node->po = true;
-				}
-			}
-			if (wire->port_input) {
-				std::vector<AndNode*> &inpvec = inputs[wire->name];
-				for (auto bit : sigmap(wire)) {
-					node = wire_nodes.at(bit);
-					inpvec.push_back(node);
-					node->pi = true;
-				}
-			}
-		}
-
 		Yosys::pool<RTLIL::IdString> known_cells;
 		if (import_ff)
 			known_cells = {ID($_AND_), ID($_NOT_), ID($ff)};
 		else
 			known_cells = {ID($_AND_), ID($_NOT_)};
 
-		if (inplace)
 		for (auto cell : m->cells())
 		if (!known_cells.count(cell->type))
 		for (auto &conn : cell->connections_) {
@@ -626,13 +595,10 @@ struct Network {
 				imported_cells.push_back(cell);
 			} else {
 				// There are foreign cells in the module
-				if (!inplace)
-					log_error("Foreign cell in input module: %s", log_id(cell->type));
 				impure_module = true;
 			}
 		}
 
-		if (inplace)
 		for (auto cell : imported_cells)
 			m->remove(cell);
 
@@ -646,33 +612,14 @@ struct Network {
 		log("Imported %lu nodes\n", nodes.size());
 	}
 
-	void yosys_perimeter(RTLIL::Module *m, bool inplace=false)
+	void yosys_perimeter(RTLIL::Module *m)
 	{
-		if (inplace) {
-			for (auto node : nodes)
-			if (!node->po && !node->pi)
-				node->yw = RTLIL::SigBit();
-			else
-				log_assert(node->yw.wire);
-			return;
-		}
-
+		(void) m;
 		for (auto node : nodes)
+		if (!node->po && !node->pi)
 			node->yw = RTLIL::SigBit();
-
-		for (auto &output : outputs) {
-			RTLIL::Wire *w = m->addWire(output.first, output.second.size());
-			w->port_output = true;
-			for (int i = 0; i < w->width; i++)
-				output.second[i]->yw = RTLIL::SigBit(w, i);
-		}
-		for (auto &output : inputs) {
-			RTLIL::Wire *w = m->addWire(output.first, output.second.size());
-			w->port_input = true;
-			for (int i = 0; i < w->width; i++)
-				output.second[i]->yw = RTLIL::SigBit(w, i);
-		}
-		m->fixup_ports();
+		else
+			log_assert(node->yw.wire);
 	}
 
 	void yosys_wires(RTLIL::Module *m, bool mapping_only=false)
@@ -693,9 +640,9 @@ struct Network {
 		}
 	}
 
-	void yosys_export(RTLIL::Module *m, bool inplace=true)
+	void yosys_export(RTLIL::Module *m)
 	{
-		yosys_perimeter(m, inplace);
+		yosys_perimeter(m);
 		yosys_wires(m);
 
 		for (auto node : nodes) {
@@ -1364,10 +1311,9 @@ struct Network {
 		}
 	}
 
-	void emit_luts(RTLIL::Module *m, bool inplace=true,
-				   bool gate2=false)
+	void emit_luts(RTLIL::Module *m, bool gate2=false)
 	{
-		yosys_perimeter(m, inplace);
+		yosys_perimeter(m);
 		yosys_wires(m, true);
 
 		for (auto node : nodes) {
@@ -1508,15 +1454,15 @@ struct ToymapPass : Pass {
 			Network net;
 			net.max_cut = lut;
 			net.no_exact_area = no_exact_area;
-			net.yosys_import(m, true, import_ff);
+			net.yosys_import(m, import_ff);
 			bool emitted = false;
 			for (auto cmd : commands) {
 				if      (cmd == "-trivial_cuts")  net.trivial_cuts();
 				else if (cmd == "-scramble_lag")  net.scramble_lag();
 				else if (cmd == "-depth_cuts")    net.depth_cuts();
 				else if (cmd == "-dump_cuts")     net.dump_cuts();
-				else if (cmd == "-emit_luts")   { net.emit_luts(m, true); emitted = true; }
-				else if (cmd == "-emit_gate2")  { net.emit_luts(m, true, true); emitted = true; }
+				else if (cmd == "-emit_luts")   { net.emit_luts(m); emitted = true; }
+				else if (cmd == "-emit_gate2")  { net.emit_luts(m, true); emitted = true; }
 				else log_error("Unknown command: %s\n", cmd.c_str());
  			}
  			if (!emitted)
