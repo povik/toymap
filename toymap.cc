@@ -574,12 +574,22 @@ struct Network {
 				imported_cells.push_back(cell);
 			} else if (cell->type.in(ID($_AND_), ID($_NOT_))) {
 				AndNode *node = wire_nodes.at(sigmap(cell->getPort(Yosys::ID::Y)));
-				NodeInput *ins = node->ins;
 
 				if (node->has_foreign_cell_users) {
 					node->po = true;
 					log_assert(node->yw.wire);
+
+					AndNode *indirect_node = new AndNode();
+					node->ins[0].set_node(indirect_node);
+					node->ins[1].set_const(1);
+
+					node = indirect_node;
+					node->has_foreign_cell_users = false;
+					node->visited = false;
+					nodes.push_back(node);
 				}
+
+				NodeInput *ins = node->ins;
 
 				if (cell->type == ID($_AND_)) {
 					ins[0].set_node(wire_nodes.at(sigmap(cell->getPort(Yosys::ID::A))));
@@ -833,7 +843,8 @@ struct Network {
 
 		int area = 0, support_area = 0;
 		for (auto node : nodes) {
-			if (node->pi)
+			log_assert(!node->po || (node->ins[0].node && node->ins[1].is_const()));
+			if (node->pi || node->po)
 				continue;
 			if (node->map_fanouts)
 				area++;
@@ -952,7 +963,7 @@ struct Network {
 			// to CutEvaluation
 			std::map<std::pair<CutEvaluation, int>, int> leaderboard;
 
-			if (node->pi || (!n1 && !n2)) {
+			if (node->pi) {
 				// PI has no non-trivial cut
 				lcache->ps_len = 1;
 				lcache->ps[0].cut[0] = CoverNode{0, node};
@@ -963,48 +974,17 @@ struct Network {
 				continue;
 			}
 
-			if (!n1 || !n2) {
-				// Case of single upstream node on the `sel` input
-				int sel = !n1;
+			if (node->po) {
+				// PO has empty cache
+				lcache->ps_len = 0;
 
-				// Copy over the cut cache from the upstream node
-				*lcache = cache[node->ins[sel].node->fid];
-				lcache->mark = node;
-
-				log_assert(node->ins[sel].node);
-
-				if (node->map_fanouts)
-					deref_cut(node);
-
-				// Copy over the selected cut from the upstream node
-				CoverNode *cut = node->ins[sel].node->cut;
-				if (cut->img != NULL) {
-					std::copy(cut, cut + CUT_MAXIMUM, node->cut);
-				} else {
-					// Upstream cut is empty (due to being the
-					// `node->pi || (!n1 && !n2)` case from above).
-					// We need to make up a cut ending at that node.
-					node->cut[0].img = node->ins[sel].node;
-					node->cut[0].lag = 0;
-					node->cut[1].img = NULL;
-				}
-
-				// Fix up lag
-				int lag_delta = node->ins[sel].feat.lag;
-				for (int i = 0; i < CUT_MAXIMUM; i++)
-					node->cut[i].lag += lag_delta;
-
-				for (int pidx = 0; pidx < lcache->ps_len; pidx++)
-				for (int i = 0; i < CUT_MAXIMUM; i++)
-					lcache->ps[pidx].cut[i].lag += lag_delta;
-
-				if (node->map_fanouts)
-					ref_cut(node);
-
-				// Store the evaluation of the selected cut
-				CutEvaluation(CutList(node->cut), node).select_on(node);
+				// Selected cut is the trivial one
+				node->cut[0] = CoverNode{0, node->ins[0].node};
+				node->cut[1] = CoverNode{0, NULL};
 				continue;
 			}
+
+			log_assert(n1 && n2);
 
 			CoverNode t1_nodes[2] = { {0, n1}, {0, NULL} };
 			CoverNode t2_nodes[2] = { {0, n2}, {0, NULL} };
