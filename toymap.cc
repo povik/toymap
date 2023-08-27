@@ -224,9 +224,17 @@ struct AndNode {
 		bool has_foreign_cell_users;
 		int timedelta;
 	};
-	int max_depth;
+	int depth_limit;
 	int fid; // frontier index
 	int depth;
+
+	AndNode *po_fanin()
+	{
+		log_assert(po);
+		log_assert(ins[1].is_const() && ins[1].eval() == 1);
+		log_assert(ins[0].node);
+		return ins[0].node;
+	}
 
 	std::vector<bool> truth_table()
 	{
@@ -1172,7 +1180,9 @@ struct Network {
 			fanin_refs /= cut_width;
 		}
 		bool reject(AndNode *node) const 
-			{ return depth > node->max_depth; }
+			{ return depth > node->depth_limit; }
+		void select_on(AndNode *node) const
+			{ log_assert(!reject(node)); DepthEval::select_on(node); }
 		bool operator<(const AreaFlowEval other) const
 			{ return std::tie(area_flow, fanin_refs, depth)
 						< std::tie(other.area_flow, other.fanin_refs, other.depth); }
@@ -1208,11 +1218,27 @@ struct Network {
 			return ret;
 		}
 		bool reject(AndNode *node) const 
-			{ return depth > node->max_depth; }
+			{ return depth > node->depth_limit; }
 		bool operator<(const ExactAreaEval other) const
 			{ return std::tie(exact_area, fanin_refs, depth)
 						< std::tie(other.exact_area, other.fanin_refs, other.depth); }
 	};
+
+	void spread_depth_limit(int po_depth)
+	{
+		for (auto node : nodes)
+			node->depth_limit = std::numeric_limits<int>::max();
+		for (auto it = nodes.rbegin(); it != nodes.rend(); it++) {
+			if ((*it)->po) {
+				(*it)->po_fanin()->depth_limit = po_depth;
+			} else {
+				for (auto cut_fanin : CutList{(*it)->cut})
+					cut_fanin.img->depth_limit =
+							std::min(cut_fanin.img->depth_limit,
+							 		 (*it)->depth_limit - 1);
+			}
+		}
+	}
 
 	void depth_cuts()
 	{
@@ -1247,29 +1273,24 @@ struct Network {
 		cuts<DepthEval2>();
 
 		int target_depth = 0;
-		for (auto node : nodes) {
-			target_depth = std::max(target_depth, node->depth);
-			node->max_depth = std::numeric_limits<int>::max();
-		}
+		for (auto node : nodes)
+		if (node->po)
+			target_depth = std::max(target_depth, node->po_fanin()->depth);
 		log("Mapping: Depth will be %d\n", target_depth);
-
-		for (auto it = nodes.rbegin(); it != nodes.rend(); it++) {
-			if ((*it)->po)
-				(*it)->max_depth = target_depth;
-			for (auto fanin : (*it)->fanins())
-				fanin->max_depth = std::min(fanin->max_depth,
-											(*it)->max_depth - 1);
-		}
 
 		// Call `walk_mapping()` again to print the current area
 		walk_mapping();
 		log("Mapping: Performing area recovery\n");
 
+		spread_depth_limit(target_depth);
 		cuts<AreaFlowEval>();
+		spread_depth_limit(target_depth);
 		cuts<AreaFlowEval>();
 
 		if (!no_exact_area) {
+			spread_depth_limit(target_depth);
 			cuts<ExactAreaEval>();
+			spread_depth_limit(target_depth);
 			cuts<ExactAreaEval>();
 		}
 
