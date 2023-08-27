@@ -218,6 +218,7 @@ struct AndNode {
 		struct {
 			CoverNode cut[CUT_MAXIMUM];	
 			int area_flow;
+			int edge_flow;
 			int map_fanouts;
 			int fanouts;
 		};
@@ -1081,6 +1082,7 @@ struct Network {
 		int depth;
 		int cut_width;
 		int area_flow;
+		int edge_flow;
 
 		DepthEval(CutList cutlist, AndNode *node, bool area_flow2=false)
 		{
@@ -1099,6 +1101,11 @@ struct Network {
 					area_flow += cut_node.img->area_flow;
 				area_flow /= std::max(1, node->map_fanouts);
 			}
+
+			edge_flow = 100 * cut_width;
+			for (auto cut_node : cutlist)
+				edge_flow += cut_node.img->edge_flow;
+			edge_flow /= std::max(1, node->map_fanouts);
 		}
 
 		static int compute_area_flow(CutList cutlist, AndNode *node, bool top=true)
@@ -1145,18 +1152,19 @@ struct Network {
 		}
 
 		bool operator<(const DepthEval other) const
-			{ return std::tie(depth, cut_width, area_flow)
-						< std::tie(other.depth, other.cut_width, other.area_flow); }
+			{ return std::tie(depth, cut_width, area_flow, edge_flow)
+						< std::tie(other.depth, other.cut_width, other.area_flow, other.edge_flow); }
 		bool reject(AndNode *root) const	{ (void) root; return false; }
-		void select_on(AndNode *node) const	{ node->depth = depth; node->area_flow = area_flow; }
+		void select_on(AndNode *node) const
+			{ node->depth = depth; node->area_flow = area_flow; node->edge_flow = edge_flow; }
 	};
 
 	struct DepthEval2 : public DepthEval {
 		DepthEval2(CutList cutlist, AndNode *node)
 			: DepthEval(cutlist, node) {}
 		bool operator<(const DepthEval2 other) const
-			{ return std::tie(depth, area_flow, cut_width)
-						< std::tie(other.depth, other.area_flow, other.cut_width); }
+			{ return std::tie(depth, area_flow, edge_flow, cut_width)
+						< std::tie(other.depth, other.area_flow, other.edge_flow, other.cut_width); }
 	};
 
 	struct DepthEvalInitial : public DepthEval {
@@ -1167,25 +1175,24 @@ struct Network {
 			for (auto cut_node : cutlist)
 				area_flow += cut_node.img->area_flow;
 			area_flow /= std::max(1, node->fanouts);
+			edge_flow = 100 * cut_width;
+			for (auto cut_node : cutlist)
+				edge_flow += cut_node.img->edge_flow;
+			edge_flow /= std::max(1, node->fanouts);
 		}
 	};
 
 	struct AreaFlowEval : public DepthEval {
 		int fanin_refs;
 		AreaFlowEval(CutList cutlist, AndNode *node)
-				: DepthEval(cutlist, node) {
-			fanin_refs = 0;
-			for (auto cut_node : cutlist)
-				fanin_refs += 16 * cut_node.img->map_fanouts;
-			fanin_refs /= cut_width;
-		}
+				: DepthEval(cutlist, node) {}
 		bool reject(AndNode *node) const 
 			{ return depth > node->depth_limit; }
 		void select_on(AndNode *node) const
 			{ log_assert(!reject(node)); DepthEval::select_on(node); }
 		bool operator<(const AreaFlowEval other) const
-			{ return std::tie(area_flow, fanin_refs, depth)
-						< std::tie(other.area_flow, other.fanin_refs, other.depth); }
+			{ return std::tie(area_flow, edge_flow, cut_width, depth)
+						< std::tie(other.area_flow, other.edge_flow, other.cut_width, other.depth); }
 	};
 
 	struct ExactAreaEval : public AreaFlowEval {
@@ -1220,8 +1227,8 @@ struct Network {
 		bool reject(AndNode *node) const 
 			{ return depth > node->depth_limit; }
 		bool operator<(const ExactAreaEval other) const
-			{ return std::tie(exact_area, fanin_refs, depth)
-						< std::tie(other.exact_area, other.fanin_refs, other.depth); }
+			{ return std::tie(exact_area, cut_width, depth)
+						< std::tie(other.exact_area, other.cut_width, other.depth); }
 	};
 
 	void spread_depth_limit(int po_depth)
@@ -1248,6 +1255,7 @@ struct Network {
 		for (auto node : nodes) {
 			node->depth = 0;
 			node->area_flow = 0;
+			node->edge_flow = 0;
 			node->map_fanouts = 0;
 			node->fanouts = 0;
 			node->visited = false;
