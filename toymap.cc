@@ -5,6 +5,7 @@
 #define NPRIORITY_CUTS	8
 #define CUT_MAXIMUM		6
 
+#include <algorithm>
 #include <random>
 #include <cstdlib>
 #include <vector>
@@ -1055,22 +1056,24 @@ struct Network {
 
 			for (int i = -1; i < cache[n1->fid].ps_len; i++)
 			for (int j = -1; j < cache[n2->fid].ps_len; j++) {
-				CutList n1_cut = (i == -1) ? t1 : cache[n1->fid].ps[i].cut;
-				CutList n2_cut = (j == -1) ? t2 : cache[n2->fid].ps[j].cut;
+				CutList n1_cut = ((i == -1) ? t1 : cache[n1->fid].ps[i].cut).inject_lag(lag1);
+				CutList n2_cut = ((j == -1) ? t2 : cache[n2->fid].ps[j].cut).inject_lag(lag2);
 
-				std::map<CoverNode, bool> cook;
-				for (auto cut_node : n1_cut.inject_lag(lag1)) cook[cut_node] = true;
-				for (auto cut_node : n2_cut.inject_lag(lag2)) cook[cut_node] = true;
+				// TODO: get rid of `cook`
+				std::vector<CoverNode> cook;
+				std::set_union(
+					n1_cut.begin(), n1_cut.end(),
+					n2_cut.begin(), n2_cut.end(),
+					std::back_inserter(cook))
+				;
+				if ((int) cook.size() > max_cut) continue;
 
 				int cutlen = 0;
 				int hash = 0;
-				for (auto pair : cook) {
-					if (cutlen >= max_cut)
-						goto reject;
-					working_cut[cutlen++] = pair.first;
-					hash += (int) (long long) pair.first.img;
+				for (auto node : cook) {
+					working_cut[cutlen++] = node;
+					hash = Yosys::mkhash(hash, (uintptr_t) node.img);
 				}
-				if (0) { reject: continue; }
 				if (cutlen < CUT_MAXIMUM)
 					working_cut[cutlen] = CoverNode{0, NULL};
 
