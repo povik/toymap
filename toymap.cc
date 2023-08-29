@@ -154,22 +154,9 @@ struct NodeInput {
 		}
 	} feat;
 
-	void negate()
-	{
-		feat.negated ^= true;
-	}
-
-	void delay(State initval)
-	{
-		feat.lag++;
-		feat.initvals.push_back(initval);
-	}
-
-	void set_node(AndNode *source)
-	{
-		feat = {};
-		node = source;
-	}
+	void negate()					{ feat.negated ^= true; }
+	void delay(State initval)		{ feat.lag++; feat.initvals.push_back(initval); }
+	void set_node(AndNode *source)  { feat = {}; node = source; }
 
 	void set_const(int state)
 	{
@@ -180,16 +167,8 @@ struct NodeInput {
 			negate();
 	}
 
-	bool is_const()
-	{
-		return !node && feat.lag == 0;
-	}
-
-	bool eval()
-	{
-		log_assert(is_const());
-		return feat.negated;
-	}
+	bool is_const() { return !node && feat.lag == 0; }
+	bool eval()		{ log_assert(is_const()); return feat.negated; }
 
 	std::string describe(int descend);
 
