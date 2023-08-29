@@ -164,6 +164,11 @@ struct NodeInput {
 		{
 			initvals = std::vector<RTLIL::State>(lag, RTLIL::State::Sx);
 		}
+
+		bool operator<(const EdgeFeatures &other) const
+				{ return std::tie(negated, initvals) < std::tie(other.negated, other.initvals); }
+		bool operator==(const EdgeFeatures &other) const
+				{ return std::tie(negated, initvals) == std::tie(other.negated, other.initvals); }
 	} feat;
 
 	void negate()					{ feat.negated ^= true; }
@@ -191,6 +196,21 @@ struct NodeInput {
 	bool assume(const NodeInput &other);
 
 	std::vector<bool> truth_table(CutList cutlist);
+
+	bool operator<(const NodeInput &other) const
+	{
+		if (!node != !other.node)
+			return !node < !other.node;
+		return std::tie(feat, node) < std::tie(other.feat, other.node);
+	}
+	bool operator==(const NodeInput &other) const
+			{ return std::tie(feat, node) == std::tie(other.feat, other.node); }
+
+	unsigned int hash() const
+	{
+		log_assert(!feat.lag); // TODO
+		return (uintptr_t) node + feat.negated;
+	}
 };
 
 struct AndNode {
@@ -216,6 +236,7 @@ struct AndNode {
 		};
 		bool has_foreign_cell_users;
 		int timedelta;
+		AndNode *replacement;
 	};
 	int depth_limit;
 	int fid; // frontier index
@@ -867,6 +888,33 @@ struct Network {
 			area, support_area);
 	}
 
+	void unique()
+	{
+		tsort();
+
+		for (auto node : nodes) {
+			node->replacement = NULL;
+			if (node->ins[1] < node->ins[0])
+				std::swap(node->ins[0], node->ins[1]);	
+		}
+
+		dict<std::pair<NodeInput, NodeInput>, AndNode*> repr;
+		for (auto node : nodes)
+		if (!node->pi) {
+			for (int i = 0; i < 2; i++)
+			if (node->ins[i].node && node->ins[i].node->replacement)
+				node->ins[i].node = node->ins[i].node->replacement;
+
+			if (node->po) continue;
+			auto in_pair = std::make_pair(node->ins[0], node->ins[1]);
+			if (!repr.count(in_pair))
+				repr[in_pair] = node;
+			else
+				node->replacement = repr.at(in_pair);
+		}
+		clean();
+	}
+
 	void hash()
 	{
 		dict<u64, int> hits;
@@ -1511,6 +1559,7 @@ struct ToymapPass : Pass {
 				else if (cmd == "-scramble_lag")  net.scramble_lag();
 				else if (cmd == "-depth_cuts")    net.depth_cuts();
 				else if (cmd == "-dump_cuts")     net.dump_cuts();
+				else if (cmd == "-unique")        net.unique();
 				else if (cmd == "-hash")          net.hash();
 				else if (cmd == "-emit_luts")   { net.emit_luts(m); emitted = true; lut_post = true; }
 				else if (cmd == "-emit_gate2")  { net.emit_luts(m, true); emitted = true; }
