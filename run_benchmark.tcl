@@ -30,13 +30,13 @@ proc bench {name extra} {
 	set abc_depth4 [lutdepth]
 
 	design -load aig
-	toymap -lut 6 -depth_cuts -emit_luts {*}$extra
+	toymap -lut 6 -balance -depth_cuts -emit_luts {*}$extra
 	opt_lut
 	set toymap_area6 [lutarea]
 	set toymap_depth6 [lutdepth]
 
 	design -load aig
-	toymap -lut 4 -depth_cuts -emit_luts {*}$extra
+	toymap -lut 4 -balance -depth_cuts -emit_luts {*}$extra
 	opt_lut
 	set toymap_area4 [lutarea]
 	set toymap_depth4 [lutdepth]
@@ -45,7 +45,7 @@ proc bench {name extra} {
 	abc -g aig
 	aigmap
 	opt_clean
-	toymap -lut 6 -depth_cuts -emit_luts {*}$extra
+	toymap -lut 6 -balance -depth_cuts -emit_luts {*}$extra
 	opt_lut
 	set abc_toymap_area6 [lutarea]
 	set abc_toymap_depth6 [lutdepth]
@@ -54,7 +54,7 @@ proc bench {name extra} {
 	abc -g aig
 	aigmap
 	opt_clean
-	toymap -lut 4 -depth_cuts -emit_luts {*}$extra
+	toymap -lut 4 -balance -depth_cuts -emit_luts {*}$extra
 	opt_lut
 	set abc_toymap_area4 [lutarea]
 	set abc_toymap_depth4 [lutdepth]
