@@ -106,6 +106,12 @@ State invert(State state)
 
 struct NodeInput {
 	NodeInput() {}
+	NodeInput(CoverNode node, bool negated)
+	{
+		set_node(node.img);
+		feat.lag = node.lag;
+		feat.negated = negated;
+	}
 
 	AndNode *node = NULL;
 	struct EdgeFeatures {
@@ -188,6 +194,8 @@ struct NodeInput {
 	bool eval()		{ log_assert(is_const()); return feat.negated; }
 	u64 weval();
 
+	CoverNode cover_node() { log_assert(node); return CoverNode{feat.lag, node}; }
+
 	std::string describe(int descend);
 
 	bool expand();
@@ -232,12 +240,16 @@ struct AndNode {
 			int area_flow;
 			int edge_flow;
 			int map_fanouts;
-			int fanouts;
 		};
 		bool has_foreign_cell_users;
 		int timedelta;
-		AndNode *replacement;
+		struct {
+			AndNode *replacement;
+			bool feeds_inverter;
+			int andtree_counter;
+		};
 	};
+	int fanouts;
 	int depth_limit;
 	int fid; // frontier index
 	int depth;
@@ -248,6 +260,15 @@ struct AndNode {
 		if (pi)
 			return;
 		weval = ins[0].weval() & ins[1].weval();
+	}
+
+	void apply_replacements()
+	{
+		for (int i = 0; i < 2; i++)
+		while (ins[i].node && ins[i].node->replacement) {
+			log_assert(ins[i].node != ins[i].node->replacement);
+			ins[i].node = ins[i].node->replacement;
+		}
 	}
 
 	std::vector<bool> truth_table()
@@ -901,9 +922,7 @@ struct Network {
 		dict<std::pair<NodeInput, NodeInput>, AndNode*> repr;
 		for (auto node : nodes)
 		if (!node->pi) {
-			for (int i = 0; i < 2; i++)
-			if (node->ins[i].node && node->ins[i].node->replacement)
-				node->ins[i].node = node->ins[i].node->replacement;
+			node->apply_replacements();
 
 			if (node->po) continue;
 			auto in_pair = std::make_pair(node->ins[0], node->ins[1]);
@@ -913,6 +932,101 @@ struct Network {
 				node->replacement = repr.at(in_pair);
 		}
 		clean();
+	}
+
+	void collect(std::vector<NodeInput> &vec, CoverNode node)
+	{
+		if (node.img->pi) {
+			vec.emplace_back(node, false);
+			return;
+		}
+
+		for (int i = 0; i < 2; i++)
+		if (node.img->ins[i].node) {
+			if (node.img->ins[i].node->fanouts > 1 || node.img->ins[i].node->feeds_inverter) {
+				vec.emplace_back(node.img->ins[i].cover_node(),
+								 node.img->ins[i].feat.negated);
+			} else {
+				collect(vec, node.img->ins[i].cover_node());
+			}
+		}
+	}
+
+	AndNode *balance_tree(AndNode *root)
+	{
+		std::vector<NodeInput> vec;
+
+		collect(vec, CoverNode{0, root});
+		std::sort(vec.begin(), vec.end(), [](NodeInput a, NodeInput b){
+			return a.node->depth > b.node->depth;
+		});
+		log_assert(vec.size() > 1);
+
+		while (vec.size() > 1) {
+			AndNode *new_node = new AndNode();
+			nodes.push_back(new_node);
+			new_node->ins[0] = vec.back(); vec.pop_back();
+			new_node->ins[1] = vec.back(); vec.pop_back();
+			new_node->fanouts = 1;
+			new_node->depth = std::max(
+					new_node->ins[0].node->depth, new_node->ins[1].node->depth) + 1;
+			vec.emplace_back(CoverNode{0, new_node}, false);
+			std::sort(vec.begin(), vec.end(), [](NodeInput a, NodeInput b){
+				return a.node->depth > b.node->depth;
+			});
+		}
+		log_assert(vec.size() == 1);
+
+		AndNode *ret = vec.front().node;
+		log_assert(!vec.front().feat.negated);
+		std::swap(ret->fanouts, root->fanouts);
+		ret->feeds_inverter = root->feeds_inverter;
+		ret->andtree_counter = root->andtree_counter;
+		ret->replacement = NULL;
+
+		return ret;
+	}
+
+	void balance()
+	{
+		tsort();
+		fanouts();
+
+		for (auto node : nodes) {
+			node->replacement = NULL;
+			node->feeds_inverter = false;
+			node->andtree_counter = 2;
+			node->depth = 0;
+			for (auto fanin : node->fanins())
+				node->depth = std::max(node->depth, fanin->depth + 1);
+		}
+
+		for (auto node : nodes)
+		if (!node->pi)
+		for (int i = 0; i < 2; i++)
+		if (node->ins[i].node && (node->ins[i].feat.negated || node->po))
+			node->ins[i].node->feeds_inverter = true;
+
+		unsigned long size = nodes.size();
+		for (unsigned long j = 0; j < size; j++) {
+			AndNode *node = nodes[j];
+			node->apply_replacements();
+
+			if (!node->pi)
+			for (int i = 0; i < 2; i++) {
+				if (node->ins[i].node && !node->ins[i].node->feeds_inverter
+						&& node->ins[i].node->fanouts <= 1)
+					node->andtree_counter += node->ins[i].node->andtree_counter;
+			}
+
+			if (!node->pi)
+			if ((node->fanouts > 1 || node->feeds_inverter) \
+					&& node->andtree_counter >= 3) {
+				// This is the root of an AND tree we want to balance
+				node->replacement = balance_tree(node);
+			}
+		}
+		clean(true);
 	}
 
 	void hash()
@@ -1334,25 +1448,31 @@ struct Network {
 		}
 	}
 
-	void depth_cuts()
+	void fanouts()
 	{
-		tsort();
-		frontier();
-
-		for (auto node : nodes) {
-			node->depth = 0;
-			node->area_flow = 0;
-			node->edge_flow = 0;
-			node->map_fanouts = 0;
+		for (auto node : nodes)
 			node->fanouts = 0;
-			node->visited = false;
-		}
 
 		for (auto node : nodes) {
 			if (node->po)
 				node->fanouts++;
 			for (auto fanin : node->fanins())
 				fanin->fanouts++;
+		}
+	}
+
+	void depth_cuts()
+	{
+		tsort();
+		frontier();
+		fanouts();
+
+		for (auto node : nodes) {
+			node->depth = 0;
+			node->area_flow = 0;
+			node->edge_flow = 0;
+			node->map_fanouts = 0;
+			node->visited = false;
 		}
 
 		cuts<DepthEvalInitial>(false);
@@ -1560,6 +1680,7 @@ struct ToymapPass : Pass {
 				else if (cmd == "-depth_cuts")    net.depth_cuts();
 				else if (cmd == "-dump_cuts")     net.dump_cuts();
 				else if (cmd == "-unique")        net.unique();
+				else if (cmd == "-balance")		  net.balance();
 				else if (cmd == "-hash")          net.hash();
 				else if (cmd == "-emit_luts")   { net.emit_luts(m); emitted = true; lut_post = true; }
 				else if (cmd == "-emit_gate2")  { net.emit_luts(m, true); emitted = true; }
