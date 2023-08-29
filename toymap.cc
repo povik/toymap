@@ -5,9 +5,11 @@
 #define NPRIORITY_CUTS	8
 #define CUT_MAXIMUM		6
 
+#include <random>
 #include <cstdlib>
 #include <vector>
 #include <map>
+#include <cstdint>
 
 // Include Yosys stuff
 #include "kernel/rtlil.h"
@@ -15,7 +17,16 @@
 #include "kernel/log.h"
 #include "kernel/ff.h"
 
+template<> struct Yosys::hash_ops<uint64_t> : hash_int_ops
+{
+	static inline unsigned int hash(uint64_t a) {
+		return mkhash((unsigned int)(a), (unsigned int)(a >> 32));
+	}
+};
+
+typedef uint64_t u64;
 namespace RTLIL = Yosys::RTLIL;
+using Yosys::dict;
 using Yosys::log;
 using Yosys::log_error;
 using Yosys::log_id;
@@ -169,6 +180,7 @@ struct NodeInput {
 
 	bool is_const() { return !node && feat.lag == 0; }
 	bool eval()		{ log_assert(is_const()); return feat.negated; }
+	u64 weval();
 
 	std::string describe(int descend);
 
@@ -207,6 +219,14 @@ struct AndNode {
 	int depth_limit;
 	int fid; // frontier index
 	int depth;
+	u64 weval;
+
+	void propagate_weval()
+	{
+		if (pi)
+			return;
+		weval = ins[0].weval() & ins[1].weval();
+	}
 
 	std::vector<bool> truth_table()
 	{
@@ -349,6 +369,17 @@ std::vector<bool> NodeInput::truth_table(CutList cutlist)
 		return std::vector<bool>(1 << cutlist.size, feat.negated);
 	} else {
 		return node->truth_table(cutlist.inject_lag(-feat.lag), feat.negated);
+	}
+}
+
+u64 NodeInput::weval()
+{
+	if (!node) {
+		log_assert(is_const());
+		return eval() ? ~(u64) 0 : 0;
+	} else {
+		log_assert(!feat.lag);
+		return feat.negated ? ~node->weval : node->weval;
 	}
 }
 
@@ -833,6 +864,41 @@ struct Network {
 
 		log("Mapping: Area is %d nodes (of those %d are single-fanout)\n",
 			area, support_area);
+	}
+
+	void hash()
+	{
+		dict<u64, int> hits;
+		std::random_device rd;
+		std::mt19937 gen(rd());
+		std::uniform_int_distribution<unsigned long long> u64rand(
+			std::numeric_limits<u64>::min(),
+			std::numeric_limits<u64>::max()
+		);
+
+		// Assign random vector on a PI
+		for (auto node : nodes)
+		if (node->pi)
+			node->weval = u64rand(gen);
+
+		int non_po_nodes = 0;
+		for (auto node : nodes)
+		if (!node->po) {
+			non_po_nodes++;
+			node->propagate_weval();
+			hits[node->weval]++; 
+		}
+
+		u64 nsat_calls = 0;
+		for (auto pair : hits) {
+			if (pair.second > 10)
+				log("Repeated pattern (%d): %llx\n", pair.second, pair.first);
+			nsat_calls += pair.second * (pair.second - 1);
+		}
+
+		log("Estimated %lld SAT calls for full equivalence checking (cf. %lld in naive arrangement, reduced is %lld %% of naive)\n",
+			nsat_calls, ((u64) non_po_nodes - 1) * non_po_nodes,
+			100 * nsat_calls / (((u64) non_po_nodes - 1) * non_po_nodes));
 	}
 
 	void apply_timedelta()
@@ -1442,6 +1508,7 @@ struct ToymapPass : Pass {
 				else if (cmd == "-scramble_lag")  net.scramble_lag();
 				else if (cmd == "-depth_cuts")    net.depth_cuts();
 				else if (cmd == "-dump_cuts")     net.dump_cuts();
+				else if (cmd == "-hash")          net.hash();
 				else if (cmd == "-emit_luts")   { net.emit_luts(m); emitted = true; lut_post = true; }
 				else if (cmd == "-emit_gate2")  { net.emit_luts(m, true); emitted = true; }
 				else log_error("Unknown command: %s\n", cmd.c_str());
