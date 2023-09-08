@@ -673,7 +673,13 @@ struct Network {
 		clean(false);
 		compact();
 		clean(false);
-		log("Imported %lu nodes\n", nodes.size());
+
+		int nnodes = 0;
+		for (auto node : nodes)
+		if (!node->po && !node->pi)
+			nnodes++;
+
+		log("Imported %d nodes\n", nnodes);
 	}
 
 	void yosys_perimeter(RTLIL::Module *m)
