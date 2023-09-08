@@ -884,7 +884,7 @@ struct Network {
 		log("Frontier is %d wide at its peak\n", frontier_size);
 	}
 
-	void walk_mapping()
+	int walk_mapping(bool verbose=false)
 	{
 		for (auto it = nodes.rbegin(); it != nodes.rend(); it++) {
 			AndNode *node = *it;
@@ -897,9 +897,11 @@ struct Network {
 		}
 
 		for (auto node : nodes)
-		if (node->po)
-		if (!node->map_fanouts++)
-			ref_cut(node);
+		if (node->po) {
+			log_assert(node->map_fanouts == 0);
+			if (!node->map_fanouts++)
+				ref_cut(node);	
+		}
 
 		int area = 0, support_area = 0;
 		for (auto node : nodes) {
@@ -911,8 +913,11 @@ struct Network {
 				support_area++;
 		}
 
-		log("Mapping: Area is %d nodes (of those %d are single-fanout)\n",
-			area, support_area);
+		if (verbose)
+			log("Mapping: Area is %d nodes (of those %d are single-fanout)\n",
+				area, support_area);
+
+		return area;
 	}
 
 	void unique()
@@ -1147,7 +1152,7 @@ struct Network {
 	}
 
 	template<typename CutEvaluation>
-	void cuts(bool consider_previous_cut=true)
+	void cuts(bool consider_previous_cut=true, bool late_reject=false)
 	{
 		log_assert(max_cut <= CUT_MAXIMUM);
 		log_assert(CUT_MAXIMUM >= 3);
@@ -1215,6 +1220,7 @@ struct Network {
 
 			if (consider_previous_cut) {
 				lcache->ps_len++;
+				log_assert(!CutEvaluation(CutList(node->cut), node).reject(node));
 				std::copy(node->cut, node->cut + CUT_MAXIMUM, lcache->ps[0].cut);
 				leaderboard[
 					std::make_pair(CutEvaluation(CutList(node->cut), node),
@@ -1247,7 +1253,8 @@ struct Network {
 
 				auto working_eval = std::make_pair(CutEvaluation(CutList(working_cut), node), hash);
 
-				if (working_eval.first.reject(node) || leaderboard.count(working_eval))
+				if ((!late_reject && working_eval.first.reject(node))
+						|| leaderboard.count(working_eval))
 					continue;
 
 				int slot;
@@ -1275,6 +1282,10 @@ struct Network {
 			log_assert(!leaderboard.empty());
 			CoverNode *best_cut = lcache->ps[leaderboard.begin()->second].cut;
 
+			if (late_reject && leaderboard.begin()->first.first.reject(node))
+				goto done;
+			log_assert(!leaderboard.begin()->first.first.reject(node));
+
 			if (node->map_fanouts)
 				deref_cut(node);
 
@@ -1283,9 +1294,22 @@ struct Network {
 
 			if (node->map_fanouts)
 				ref_cut(node);
+
+		done:
+			{
+				int depth = 0;
+				for (auto cut_node : CutList{node->cut}) {
+					depth = std::max(depth, cut_node.img->depth + 1);
+				}
+				node->depth = depth;
+			}
 		}
 
 		delete[] cache;
+
+		if (true)
+			log("%4s A=%6d\n", CutEvaluation::prefix(), walk_mapping());
+
 	}
 
 	struct DepthEval {
@@ -1364,45 +1388,58 @@ struct Network {
 		bool operator<(const DepthEval other) const
 			{ return std::tie(depth, cut_width, area_flow, edge_flow)
 						< std::tie(other.depth, other.cut_width, other.area_flow, other.edge_flow); }
-		bool reject(AndNode *root) const	{ (void) root; return false; }
+		bool reject(AndNode *node) const 
+			{ return depth > node->depth_limit; }
 		void select_on(AndNode *node) const
-			{ node->depth = depth; node->area_flow = area_flow; node->edge_flow = edge_flow; }
-	};
+			{ node->area_flow = area_flow; node->edge_flow = edge_flow; }
 
-	struct DepthEval2 : public DepthEval {
-		DepthEval2(CutList cutlist, AndNode *node)
-			: DepthEval(cutlist, node) {}
-		bool operator<(const DepthEval2 other) const
-			{ return std::tie(depth, area_flow, edge_flow, cut_width)
-						< std::tie(other.depth, other.area_flow, other.edge_flow, other.cut_width); }
+		static const char *prefix() { return "D:  "; }
 	};
 
 	struct DepthEvalInitial : public DepthEval {
 		DepthEvalInitial(CutList cutlist, AndNode *node)
 			: DepthEval(cutlist, node, false)
 		{
-			area_flow = 100;
+			area_flow = 1000;
 			for (auto cut_node : cutlist)
 				area_flow += cut_node.img->area_flow;
 			area_flow /= std::max(1, node->fanouts);
-			edge_flow = 100 * cut_width;
+			edge_flow = 1000 * cut_width;
 			for (auto cut_node : cutlist)
 				edge_flow += cut_node.img->edge_flow;
 			edge_flow /= std::max(1, node->fanouts);
 		}
+
+		static const char *prefix() { return "DI: "; }
+	};
+
+	struct DepthEvalInitial2 : public DepthEvalInitial {
+		DepthEvalInitial2(CutList cutlist, AndNode *node) : DepthEvalInitial(cutlist, node) {}
+		bool operator<(const DepthEvalInitial2 other) const
+			{ return std::tie(depth, area_flow, edge_flow, cut_width)
+						< std::tie(other.depth, other.area_flow, other.edge_flow, other.cut_width); }
+
+		static const char *prefix() { return "DI2:"; }
+	};
+
+	struct AreaEvalInitial : public DepthEvalInitial {
+		AreaEvalInitial(CutList cutlist, AndNode *node) : DepthEvalInitial(cutlist, node) {}
+		bool operator<(const AreaEvalInitial other) const
+			{ return std::tie(area_flow, edge_flow, cut_width, depth)
+						< std::tie(other.area_flow, other.edge_flow, other.cut_width, other.depth); }
+
+		static const char *prefix() { return "AI: "; }
 	};
 
 	struct AreaFlowEval : public DepthEval {
 		int fanin_refs;
 		AreaFlowEval(CutList cutlist, AndNode *node)
 				: DepthEval(cutlist, node) {}
-		bool reject(AndNode *node) const 
-			{ return depth > node->depth_limit; }
-		void select_on(AndNode *node) const
-			{ log_assert(!reject(node)); DepthEval::select_on(node); }
 		bool operator<(const AreaFlowEval other) const
 			{ return std::tie(area_flow, edge_flow, cut_width, depth)
 						< std::tie(other.area_flow, other.edge_flow, other.cut_width, other.depth); }
+
+		static const char *prefix() { return "A:  "; }
 	};
 
 	struct ExactAreaEval : public AreaFlowEval {
@@ -1439,12 +1476,14 @@ struct Network {
 		bool operator<(const ExactAreaEval other) const
 			{ return std::tie(exact_area, cut_width, depth)
 						< std::tie(other.exact_area, other.cut_width, other.depth); }
+
+		static const char *prefix() { return "E:  "; }
 	};
 
 	void spread_depth_limit(int overall_depth)
 	{
 		for (auto node : nodes)
-			node->depth_limit = node->po ? overall_depth + 1 
+			node->depth_limit = node->po ? overall_depth + 1
 									: std::numeric_limits<int>::max();
 		for (auto it = nodes.rbegin(); it != nodes.rend(); it++) {
 			for (auto cut_fanin : CutList{(*it)->cut})
@@ -1479,9 +1518,24 @@ struct Network {
 			node->edge_flow = 0;
 			node->map_fanouts = 0;
 			node->visited = false;
+			node->depth_limit = std::numeric_limits<int>::max();
 		}
 
 		cuts<DepthEvalInitial>(false);
+
+		int target_depth = 0;
+		for (auto node : nodes)
+		if (node->po)
+		for (auto fanin : node->fanins())
+			target_depth = std::max(target_depth, fanin->depth);
+		log("Mapping: Depth will be %d\n", target_depth);
+		spread_depth_limit(target_depth);
+
+		cuts<DepthEvalInitial2>(false, true);
+		spread_depth_limit(target_depth);
+		
+		cuts<AreaEvalInitial>(false, true);
+		spread_depth_limit(target_depth);
 
 		// `map_fanouts` is a reference counter on each AIG node for the number of times
 		// that node is used as a fanin in the current mapping draft. Now when the initial cuts
@@ -1490,22 +1544,10 @@ struct Network {
 		// reference counts if the selected cut on a node that is part of the mapping changes.
 		walk_mapping();
 
-		cuts<DepthEval>();
-		cuts<DepthEval2>();
-
-		int target_depth = 0;
-		for (auto node : nodes)
-		if (node->po)
-		for (auto fanin : node->fanins())
-			target_depth = std::max(target_depth, fanin->depth);
-		log("Mapping: Depth will be %d\n", target_depth);
-
 		// Call `walk_mapping()` again to print the current area
 		walk_mapping();
 		log("Mapping: Performing area recovery\n");
 
-		spread_depth_limit(target_depth);
-		cuts<AreaFlowEval>();
 		spread_depth_limit(target_depth);
 		cuts<AreaFlowEval>();
 
@@ -1518,7 +1560,7 @@ struct Network {
 
 		// Walk the mapping once more to (1) check the `map_fanouts` counters for consistence;
 		// and (2) print out the final mapping area.
-		walk_mapping();
+		walk_mapping(true);
 	}
 
 	void dump_cuts()
