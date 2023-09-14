@@ -14,6 +14,8 @@ Some features:
 
  * Integrates into [Yosys](https://github.com/yosysHQ/yosys)
 
+ * Comes with a pass for basic LUT4 graph rewriting
+
 ## Build
 
     python3 pmgen.py lutcuts.pmg > lutcuts_pmg.h && yosys-config --build toymap.so toymap.cc lutdepth.cc post.cc
