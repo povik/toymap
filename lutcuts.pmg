@@ -1,0 +1,102 @@
+pattern lut_cuts
+udata <int> max_nluts max_nouterfans max_nleaves
+udata <Cell *> root
+
+state <SigSpec> leaves
+state <dict<SigBit, int>> cut_users
+state <int> descend nluts
+state <SigPool> outerfans driven
+
+match root_
+	index <Cell*> root_ === root
+endmatch
+
+code leaves cut_users nluts outerfans driven
+	nluts = 1;
+	outerfans.add(port(root, \Y));
+	driven.add(port(root, \Y));
+	SigSpec a = port(root, \A);
+	a.sort_and_unify();
+	log_assert(!a.has_const());
+	for (auto bit : a)
+		cut_users[bit]++;
+
+	leaves = a;
+endcode
+
+code descend
+	for (descend = 0; descend < leaves.size(); descend++)
+		branch;
+	reject;
+endcode
+
+code
+	subpattern(cuts_descended);
+	reject;
+endcode
+
+subpattern cuts_descended
+arg leaves cut_users descend nluts outerfans driven
+
+match node
+	select node->type == $lut
+	index <SigBit> port(node, \Y) === leaves.extract(descend)
+endmatch
+
+code leaves cut_users descend nluts outerfans driven
+	for (auto pair : cut_users)
+	log_assert(driven.check(pair.first) || leaves.extract(pair.first).size());
+
+	nluts++;
+	SigBit y = port(node, \Y);
+	log_assert(cut_users[y] < nusers(y));
+	if (cut_users[y] + 1 != nusers(y)) {
+		if ((int) outerfans.size() == max_nouterfans)
+			reject;
+		outerfans.add(y);
+	}
+
+	driven.add(y);
+	leaves.remove(descend);
+	{
+		SigSpec a = port(node, \A);
+		a.sort_and_unify();
+		log_assert(!a.has_const());
+
+		for (auto bit : a) {
+			if (!cut_users[bit]++) {
+				leaves.append(bit);
+			} else if (cut_users[bit] + 1 == nusers(bit)) {
+				// Our earlier outerfans reasoning applies
+				// no more, we need to revisit all options
+				// for expansion
+				descend = 0;
+
+				if (outerfans.check(bit))
+					outerfans.remove(bit);
+			}
+		}
+	}
+
+	if (leaves.size() > max_nleaves)
+		reject;
+
+	for (auto pair : cut_users)
+	log_assert(driven.check(pair.first) || leaves.extract(pair.first).size());
+endcode
+
+code descend
+	if (nluts < max_nluts)
+	for (; descend < leaves.size(); descend++)
+		branch;
+
+	accept;
+	reject;
+endcode
+
+code
+	subpattern(cuts_descended);
+finally
+	for (auto pair : cut_users)
+	log_assert(driven.check(pair.first) || leaves.extract(pair.first).size());
+endcode

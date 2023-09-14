@@ -11,11 +11,14 @@ struct LutdepthPass : Pass {
 	void execute(std::vector<std::string> args, RTLIL::Design *d) override
 	{
 		bool quiet = false;
+		bool write_attrs = false;
 
 		size_t argidx;
 		for (argidx = 1; argidx < args.size(); argidx++) {
 			if (args[argidx] == "-quiet")
 				quiet = true;
+			else if (args[argidx] == "-write_attrs")
+				write_attrs = true;
 			else
 				break;
 		}
@@ -46,6 +49,7 @@ struct LutdepthPass : Pass {
 
 			int max_depth = 0;
 			dict<Cell*, int> depths;
+			dict<Cell*, int> envelope;
 			for (auto cell : sort.sorted) {
 				int depth = 1;
 				for (auto bit : sigmap(cell->getPort(ID::A)))
@@ -53,6 +57,22 @@ struct LutdepthPass : Pass {
 					depth = std::max(depth, depths[driver.at(bit)] + 1);
 				depths[cell] = depth;
 				max_depth = std::max(max_depth, depth);
+			}
+
+			for (auto cell : sort.sorted)
+				envelope[cell] = max_depth;
+
+			for (auto it = sort.sorted.rbegin(); it != sort.sorted.rend(); it++) {
+				int depth = envelope[*it];
+				for (auto bit : sigmap((*it)->getPort(ID::A)))
+				if (driver.count(bit))
+					envelope[driver[bit]] = std::min(envelope[driver[bit]], depth - 1);
+			}
+
+			if (write_attrs)
+			for (auto cell : sort.sorted) {
+				cell->attributes[ID(depth)] = depths[cell];
+				cell->attributes[ID(depth_envelope)] = envelope[cell];
 			}
 
 			if (!quiet)

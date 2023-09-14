@@ -16,7 +16,7 @@ Some features:
 
 ## Build
 
-    yosys-config --build toymap.so toymap.cc lutdepth.cc post.cc
+    python3 pmgen.py lutcuts.pmg > lutcuts_pmg.h && yosys-config --build toymap.so toymap.cc lutdepth.cc post.cc
 
 ## References
 
