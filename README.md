@@ -22,6 +22,7 @@ Some features:
 
  * A. Mishchenko, S. Cho, S. Chatterjee, and R. Brayton, "Combinational and sequential mapping with priority cuts", Proc. ICCAD '07, pp. 354-361. [PDF](https://people.eecs.berkeley.edu/~alanmi/publications/2007/iccad07_map.pdf)
 
+ * S. Jang, B. Chan, K. Chung, and A. Mishchenko, "WireMap: FPGA technology mapping for improved routability". Proc. FPGA '08, pp. 47-55. [PDF](https://people.eecs.berkeley.edu/~alanmi/publications/2008/fpga08_wmap.pdf)
 
 ## Benchmarks
 
@@ -53,6 +54,9 @@ random_control/priority.aig | 169 | 329 | 194.7% | 269 | 159.2% | 43 | 62 | 51 |
 random_control/router.aig | 72 | 99 | 137.5% | 88 | 122.2% | 9 | 10 | 9 | 40 | 76 | 190.0% | 60 | 150.0% | 6 | 7 | 6 | 
 random_control/voter.aig | 2236 | 3719 | 166.3% | 2441 | 109.2% | 17 | 23 | 18 | 1461 | 2769 | 189.5% | 1501 | 102.7% | 12 | 16 | 13 | 
 
+## Credits
+
+ * Hannah Ravensloft (@Ravenslofty) -- suggestions and critique
 
 ## Copyright notice
 
