@@ -518,7 +518,7 @@ struct LutrewriteOncePass : Pass {
 	{
 		log_header(d, "Executing LUTREWRITE_ONCE pass. (rewrite local patches of LUT network)\n");
 
-		int max_nluts = 20, max_nouterfans = 1, max_nleaves = 11,
+		int max_nluts = 20, max_nouterfans = 1, max_nleaves = 9,
 			lutsize = 4;
 		bool select_root = false;
 		float w_cutoff = 1.01;
