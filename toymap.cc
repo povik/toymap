@@ -237,7 +237,7 @@ struct AndNode {
 		int refs;
 		struct {
 			CoverNode cut[CUT_MAXIMUM];	
-			int area_flow;
+			double area_flow;
 			int edge_flow;
 			int map_fanouts;
 		};
@@ -1315,7 +1315,7 @@ struct Network {
 	struct DepthEval {
 		int depth;
 		int cut_width;
-		int area_flow;
+		double area_flow;
 		int edge_flow;
 
 		DepthEval(CutList cutlist, AndNode *node, bool area_flow2=false)
@@ -1330,7 +1330,7 @@ struct Network {
 			if (area_flow2) {
 				area_flow = compute_area_flow(cutlist, node);
 			} else {
-				area_flow = 100;
+				area_flow = 1;
 				for (auto cut_node : cutlist)
 					area_flow += cut_node.img->area_flow;
 				area_flow /= std::max(1, node->map_fanouts);
@@ -1391,7 +1391,7 @@ struct Network {
 		bool reject(AndNode *node) const 
 			{ return depth > node->depth_limit; }
 		void select_on(AndNode *node) const
-			{ node->area_flow = area_flow; node->edge_flow = edge_flow; }
+			{ log_assert(area_flow >= 0); node->area_flow = area_flow; node->edge_flow = edge_flow; }
 
 		static const char *prefix() { return "D:  "; }
 	};
@@ -1400,7 +1400,7 @@ struct Network {
 		DepthEvalInitial(CutList cutlist, AndNode *node)
 			: DepthEval(cutlist, node, false)
 		{
-			area_flow = 1000;
+			area_flow = 1;
 			for (auto cut_node : cutlist)
 				area_flow += cut_node.img->area_flow;
 			area_flow /= std::max(1, node->fanouts);
