@@ -39,6 +39,7 @@ proc bench {name extra} {
 	toymap -lut 4 -balance -depth_cuts -emit_luts {*}$extra
 	opt_lut
 	lutrewrite
+	lutrewrite -shared
 	opt_lut
 	set toymap_area4 [lutarea]
 	set toymap_depth4 [lutdepth]
@@ -59,6 +60,7 @@ proc bench {name extra} {
 	toymap -lut 4 -balance -depth_cuts -emit_luts {*}$extra
 	opt_lut
 	lutrewrite
+	lutrewrite -shared
 	opt_lut
 	set abc_toymap_area4 [lutarea]
 	set abc_toymap_depth4 [lutdepth]
