@@ -363,25 +363,43 @@ void adjust(std::vector<bool>::iterator val1,
 	}
 }
 
-std::vector<std::pair<std::vector<bool>, std::vector<bool>>> find_fragments(ThruthTable &table, int nfrags)
+struct Fragment {
+	std::vector<bool> values;
+	std::vector<bool> dontcares;
+	uint32_t bs_high; // bound set high mask
+	uint32_t bs_low; // bound set low mask
+
+	bool operator<(const Fragment &other) const
+	{
+		return std::tie(values, dontcares) < std::tie(other.values, other.dontcares);
+	}
+};
+
+std::vector<Fragment> find_fragments(ThruthTable &table, int bn)
 {
+	int nfrags = 1 << bn;
 	int fraglen = table.values.size() / nfrags;
-	std::vector<std::pair<std::vector<bool>, std::vector<bool>>> found;
+	std::vector<Fragment> found;
 	log_assert(nfrags * fraglen == table.values.size());
+
+	uint32_t bs_mask = (1 << bn) - 1;
 
 	for (int i = 0; i < nfrags; i++) {
 		std::vector<bool>::iterator val = table.values.begin() + i * fraglen;
 		std::vector<bool>::iterator dc = table.dontcares.begin() + i * fraglen;
 
 		for (auto &other : found) {
-			if (matches(other.first.begin(), other.second.begin(), val, dc, fraglen)) {
-				adjust(other.first.begin(), other.second.begin(), val, dc, fraglen);
+			if (matches(other.values.begin(), other.dontcares.begin(), val, dc, fraglen)) {
+				adjust(other.values.begin(), other.dontcares.begin(), val, dc, fraglen);
+				other.bs_high |= (uint32_t) i;
+				other.bs_low |= bs_mask & ~(uint32_t) i;
 				goto match;
 			}
 		}
 
-		found.push_back(std::make_pair(std::vector<bool>(val, val + fraglen),
-								    std::vector<bool>(dc, dc + fraglen)));
+		found.push_back(Fragment{std::vector<bool>(val, val + fraglen),
+								    std::vector<bool>(dc, dc + fraglen),
+								    (uint32_t) i, bs_mask & ~(uint32_t) i});
 
 	match:
 		;
@@ -391,6 +409,8 @@ std::vector<std::pair<std::vector<bool>, std::vector<bool>>> find_fragments(Thru
 }
 
 #define LUT_SIZE 4
+
+static bool search_shared = false;
 
 void implement_varchoices(ThruthTable table, std::vector<int> vars, LutNetwork &net)
 {
@@ -424,25 +444,79 @@ void implement_varchoices(ThruthTable table, std::vector<int> vars, LutNetwork &
 	table.change_vars(std::vector<int>(vars.begin(), sep));
 
 	int bn = LUT_SIZE, fn = log2 - bn;
-	std::vector<std::pair<std::vector<bool>, std::vector<bool>>> fragments = 
-													find_fragments(table, 1 << bn);
+	std::vector<Fragment> fragments = find_fragments(table, bn);
 	log_assert(fragments.size() <= 4);
 	int nluts = ceil_log2(fragments.size());
 
-	std::sort(fragments.begin(), fragments.end());
+	// Find if there's a shared variable
+	int shared;
+	for (shared = 0; shared < bn; shared++) {
+		int nhighs = 0, nlows = 0;
+		for (auto &frag : fragments) {
+			if (frag.bs_high & 1 << shared)
+				nhighs++;
+			if (frag.bs_low & 1 << shared)
+				nlows++;
+		}
+
+		if (nlows <= 1 << (nluts - 1) && nhighs <= 1 << (nluts - 1))
+			break;
+	}
+
+	if (!search_shared || shared == bn)
+		shared = -1;
+	else
+		nluts -= 1;
+
 	ThruthTable sub;
 	for (int i = 0; i < fn; i++)
 		sub.vars.push_back(table.vars[i]);
 	for (int i = 0; i < nluts; i++)
 		sub.vars.push_back(net.ninputs + net.nodes.size() + i);
+	if (shared != -1)
+		sub.vars.push_back(table.vars[fn + shared]);
 
-	for (auto &frag : fragments) {
-		sub.values.insert(sub.values.end(), frag.first.begin(), frag.first.end());
-		sub.dontcares.insert(sub.dontcares.end(), frag.second.begin(), frag.second.end());
-	}
-	for (int i = 0; i < (1 << nluts) - fragments.size(); i++) {
-		sub.values.insert(sub.values.end(), 1 << fn, true);
-		sub.dontcares.insert(sub.dontcares.end(), 1 << fn, true);
+	std::sort(fragments.begin(), fragments.end());
+
+	if (shared != -1) {
+		// First that part of the thruth table for the shared variable being low
+		int pad = 0;
+		for (auto &frag : fragments) {
+			if (!(frag.bs_low & 1 << shared))
+				continue;
+			sub.values.insert(sub.values.end(), frag.values.begin(), frag.values.end());
+			sub.dontcares.insert(sub.dontcares.end(), frag.dontcares.begin(), frag.dontcares.end());
+			pad++;
+		}
+		for (; pad < 1 << nluts; pad++) {
+			sub.values.insert(sub.values.end(), 1 << fn, true);
+			sub.dontcares.insert(sub.dontcares.end(), 1 << fn, true);
+		}
+
+		// Then the other part
+		pad = 0;
+		for (auto &frag : fragments) {
+			if (!(frag.bs_high & 1 << shared))
+				continue;
+			sub.values.insert(sub.values.end(), frag.values.begin(), frag.values.end());
+			sub.dontcares.insert(sub.dontcares.end(), frag.dontcares.begin(), frag.dontcares.end());
+			pad++;
+		}
+		for (; pad < 1 << nluts; pad++) {
+			sub.values.insert(sub.values.end(), 1 << fn, true);
+			sub.dontcares.insert(sub.dontcares.end(), 1 << fn, true);
+		}
+
+		log_assert(sub.values.size() == 1 << (fn + nluts + 1));
+	} else {
+		for (auto &frag : fragments) {
+			sub.values.insert(sub.values.end(), frag.values.begin(), frag.values.end());
+			sub.dontcares.insert(sub.dontcares.end(), frag.dontcares.begin(), frag.dontcares.end());
+		}
+		for (int i = 0; i < (1 << nluts) - fragments.size(); i++) {
+			sub.values.insert(sub.values.end(), 1 << fn, true);
+			sub.dontcares.insert(sub.dontcares.end(), 1 << fn, true);
+		}	
 	}
 
 	std::vector<int> f_indices;
@@ -456,13 +530,18 @@ void implement_varchoices(ThruthTable table, std::vector<int> vars, LutNetwork &
 		int j = 0;
 		bool found = false;
 		for (auto &frag : fragments) {
-			if (matches(frag.first.begin(), frag.second.begin(), f.begin(), f_dc.begin(), fraglen)) {
+			if (shared != -1 && !(((i & (1 << shared)) ? frag.bs_high : frag.bs_low) & 1 << shared))
+				continue;
+
+			if (matches(frag.values.begin(), frag.dontcares.begin(),
+						f.begin(), f_dc.begin(), fraglen)) {
 				found = true;
 				break;
 			}
 			j++;
 		}
-		log_assert(found);
+		log_assert(shared != -1 || found);
+		log_assert(shared == -1 || found);
 		f_indices.push_back(j);
 	}
 
@@ -507,31 +586,83 @@ std::pair<std::vector<int>, int> explore_varchoices(ThruthTable table, int varco
 		niters++;
 		table.swap(fn + level, p[level]);
 
-		std::vector<std::pair<std::vector<bool>, std::vector<bool>>> fragments = 
-													find_fragments(table, 1 << bn);
+		std::vector<Fragment> fragments = find_fragments(table, bn);
 		if (fragments.size() <= 4) {
 			int nluts = ceil_log2(fragments.size());
+
+			// Find if there's a shared variable
+			int shared;
+			for (shared = 0; shared < bn; shared++) {
+				int nhighs = 0, nlows = 0;
+				for (auto &frag : fragments) {
+					if (frag.bs_high & 1 << shared)
+						nhighs++;
+					if (frag.bs_low & 1 << shared)
+						nlows++;
+				}
+
+				if (nlows <= 1 << (nluts - 1) && nhighs <= 1 << (nluts - 1))
+					break;
+			}
+
+			if (!search_shared || shared == bn)
+				shared = -1;
+			else
+				nluts -= 1;
 
 			ThruthTable sub;
 			for (int i = 0; i < fn; i++)
 				sub.vars.push_back(table.vars[i]);
 			for (int i = 0; i < nluts; i++)
 				sub.vars.push_back(varcounter + i);
+			if (shared != -1)
+				sub.vars.push_back(table.vars[fn + shared]);
 
 			std::sort(fragments.begin(), fragments.end());
 
-			for (auto &frag : fragments) {
-				sub.values.insert(sub.values.end(), frag.first.begin(), frag.first.end());
-				sub.dontcares.insert(sub.dontcares.end(), frag.second.begin(), frag.second.end());
-			}
-			for (int i = 0; i < (1 << nluts) - fragments.size(); i++) {
-				sub.values.insert(sub.values.end(), 1 << fn, true);
-				sub.dontcares.insert(sub.dontcares.end(), 1 << fn, true);
+			if (shared != -1) {
+				// First that part of the thruth table for the shared variable being low
+				int pad = 0;
+				for (auto &frag : fragments) {
+					if (!(frag.bs_low & 1 << shared))
+						continue;
+					sub.values.insert(sub.values.end(), frag.values.begin(), frag.values.end());
+					sub.dontcares.insert(sub.dontcares.end(), frag.dontcares.begin(), frag.dontcares.end());
+					pad++;
+				}
+				for (; pad < 1 << nluts; pad++) {
+					sub.values.insert(sub.values.end(), 1 << fn, true);
+					sub.dontcares.insert(sub.dontcares.end(), 1 << fn, true);
+				}
+
+				// Then the other part
+				pad = 0;
+				for (auto &frag : fragments) {
+					if (!(frag.bs_high & 1 << shared))
+						continue;
+					sub.values.insert(sub.values.end(), frag.values.begin(), frag.values.end());
+					sub.dontcares.insert(sub.dontcares.end(), frag.dontcares.begin(), frag.dontcares.end());
+					pad++;
+				}
+				for (; pad < 1 << nluts; pad++) {
+					sub.values.insert(sub.values.end(), 1 << fn, true);
+					sub.dontcares.insert(sub.dontcares.end(), 1 << fn, true);
+				}
+			} else {
+				for (auto &frag : fragments) {
+					sub.values.insert(sub.values.end(), frag.values.begin(), frag.values.end());
+					sub.dontcares.insert(sub.dontcares.end(), frag.dontcares.begin(), frag.dontcares.end());
+				}
+				for (int i = 0; i < (1 << nluts) - fragments.size(); i++) {
+					sub.values.insert(sub.values.end(), 1 << fn, true);
+					sub.dontcares.insert(sub.dontcares.end(), 1 << fn, true);
+				}	
 			}
 
 			int sub_nluts;
 			std::vector<int> sub_vars;
 			std::tie(sub_vars, sub_nluts) = explore_varchoices(sub, varcounter + nluts);
+
 			if (sub_nluts != std::numeric_limits<int>::max() &&
 					sub_nluts + nluts < best_nluts) {
 				best_nluts = sub_nluts + nluts;
@@ -564,6 +695,7 @@ struct LutrewriteOncePass : Pass {
 			lutsize = 4;
 		bool select_root = false;
 		float w_cutoff = 1.01;
+		search_shared = false;
 		size_t argidx;
 		for (argidx = 1; argidx < args.size(); argidx++) {
 			if (args[argidx] == "-lut" && argidx + 1 < args.size())
@@ -578,6 +710,8 @@ struct LutrewriteOncePass : Pass {
 				w_cutoff = atof(args[++argidx].c_str());
 			else if (args[argidx] == "-root")
 				select_root = true;
+			else if (args[argidx] == "-shared")
+				search_shared = true;
 			else
 				break;
 		}
