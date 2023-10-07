@@ -333,17 +333,61 @@ struct LutNetwork {
 	}
 };
 
-std::set<std::vector<bool>> find_fragments(ThruthTable &table, int nfrags)
+bool matches(std::vector<bool>::iterator val1,
+			 std::vector<bool>::iterator dc1,
+			 std::vector<bool>::iterator val2,
+			 std::vector<bool>::iterator dc2,
+			 int size)
+{
+	for (int i = 0; i < size; i++) {
+		if (!*dc1 && !*dc2 && *val1 != *val2)
+			return false;
+
+		val1++; val2++; dc1++; dc2++;
+	}
+	return true;
+}
+
+void adjust(std::vector<bool>::iterator val1,
+			std::vector<bool>::iterator dc1,
+			std::vector<bool>::iterator val2,
+			std::vector<bool>::iterator dc2,
+			int size)
+{
+	for (int i = 0; i < size; i++) {
+		if (*dc1 && !*dc2) {
+			*dc1 = false;
+			*val1 = *val2;
+		}
+		val1++; val2++; dc1++; dc2++;
+	}
+}
+
+std::vector<std::pair<std::vector<bool>, std::vector<bool>>> find_fragments(ThruthTable &table, int nfrags)
 {
 	int fraglen = table.values.size() / nfrags;
-	std::set<std::vector<bool>> fragments;
+	std::vector<std::pair<std::vector<bool>, std::vector<bool>>> found;
 	log_assert(nfrags * fraglen == table.values.size());
 
-	for (int i = 0; i < nfrags; i++)
-		fragments.insert(std::vector<bool>(table.values.begin() + i*fraglen,	
-								table.values.begin() + (i + 1)*fraglen));
+	for (int i = 0; i < nfrags; i++) {
+		std::vector<bool>::iterator val = table.values.begin() + i * fraglen;
+		std::vector<bool>::iterator dc = table.dontcares.begin() + i * fraglen;
 
-	return fragments;
+		for (auto &other : found) {
+			if (matches(other.first.begin(), other.second.begin(), val, dc, fraglen)) {
+				adjust(other.first.begin(), other.second.begin(), val, dc, fraglen);
+				goto match;
+			}
+		}
+
+		found.push_back(std::make_pair(std::vector<bool>(val, val + fraglen),
+								    std::vector<bool>(dc, dc + fraglen)));
+
+	match:
+		;
+	}
+
+	return found;
 }
 
 #define LUT_SIZE 4
@@ -380,24 +424,25 @@ void implement_varchoices(ThruthTable table, std::vector<int> vars, LutNetwork &
 	table.change_vars(std::vector<int>(vars.begin(), sep));
 
 	int bn = LUT_SIZE, fn = log2 - bn;
-	std::set<std::vector<bool>> fragments = find_fragments(table, 1 << bn);
+	std::vector<std::pair<std::vector<bool>, std::vector<bool>>> fragments = 
+													find_fragments(table, 1 << bn);
 	log_assert(fragments.size() <= 4);
 	int nluts = ceil_log2(fragments.size());
 
+	std::sort(fragments.begin(), fragments.end());
 	ThruthTable sub;
 	for (int i = 0; i < fn; i++)
 		sub.vars.push_back(table.vars[i]);
 	for (int i = 0; i < nluts; i++)
 		sub.vars.push_back(net.ninputs + net.nodes.size() + i);
 
-	for (auto frag : fragments) {
-		sub.values.insert(sub.values.end(), frag.begin(), frag.end());
-		sub.dontcares.insert(sub.dontcares.end(), 1 << fn, false);
+	for (auto &frag : fragments) {
+		sub.values.insert(sub.values.end(), frag.first.begin(), frag.first.end());
+		sub.dontcares.insert(sub.dontcares.end(), frag.second.begin(), frag.second.end());
 	}
-	auto final_frag = *fragments.rbegin();
 	for (int i = 0; i < (1 << nluts) - fragments.size(); i++) {
-		sub.values.insert(sub.values.end(), final_frag.begin(), final_frag.end());
-		sub.dontcares.insert(sub.dontcares.end(), 1 << fn, false);
+		sub.values.insert(sub.values.end(), 1 << fn, true);
+		sub.dontcares.insert(sub.dontcares.end(), 1 << fn, true);
 	}
 
 	std::vector<int> f_indices;
@@ -405,11 +450,13 @@ void implement_varchoices(ThruthTable table, std::vector<int> vars, LutNetwork &
 	for (int i = 0; i < (1 << bn); i++) {
 		std::vector<bool> f(table.values.begin() + i*fraglen,	
 							table.values.begin() + (i + 1)*fraglen);
+		std::vector<bool> f_dc(table.dontcares.begin() + i*fraglen,	
+							table.dontcares.begin() + (i + 1)*fraglen);
 
 		int j = 0;
 		bool found = false;
-		for (auto frag : fragments) {
-			if (frag == f) {
+		for (auto &frag : fragments) {
+			if (matches(frag.first.begin(), frag.second.begin(), f.begin(), f_dc.begin(), fraglen)) {
 				found = true;
 				break;
 			}
@@ -460,7 +507,8 @@ std::pair<std::vector<int>, int> explore_varchoices(ThruthTable table, int varco
 		niters++;
 		table.swap(fn + level, p[level]);
 
-		std::set<std::vector<bool>> fragments = find_fragments(table, 1 << bn);
+		std::vector<std::pair<std::vector<bool>, std::vector<bool>>> fragments = 
+													find_fragments(table, 1 << bn);
 		if (fragments.size() <= 4) {
 			int nluts = ceil_log2(fragments.size());
 
@@ -470,22 +518,16 @@ std::pair<std::vector<int>, int> explore_varchoices(ThruthTable table, int varco
 			for (int i = 0; i < nluts; i++)
 				sub.vars.push_back(varcounter + i);
 
-			for (auto frag : fragments) {
-				sub.values.insert(sub.values.end(), frag.begin(), frag.end());
-				sub.dontcares.insert(sub.dontcares.end(), 1 << fn, false);
+			std::sort(fragments.begin(), fragments.end());
+
+			for (auto &frag : fragments) {
+				sub.values.insert(sub.values.end(), frag.first.begin(), frag.first.end());
+				sub.dontcares.insert(sub.dontcares.end(), frag.second.begin(), frag.second.end());
 			}
-			#if 0
 			for (int i = 0; i < (1 << nluts) - fragments.size(); i++) {
 				sub.values.insert(sub.values.end(), 1 << fn, true);
 				sub.dontcares.insert(sub.dontcares.end(), 1 << fn, true);
 			}
-			#else
-			auto final_frag = *fragments.rbegin();
-			for (int i = 0; i < (1 << nluts) - fragments.size(); i++) {
-				sub.values.insert(sub.values.end(), final_frag.begin(), final_frag.end());
-				sub.dontcares.insert(sub.dontcares.end(), 1 << fn, false);
-			}
-			#endif
 
 			int sub_nluts;
 			std::vector<int> sub_vars;
