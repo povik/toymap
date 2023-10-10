@@ -12,11 +12,14 @@ struct LutdepthPass : Pass {
 	{
 		bool quiet = false;
 		bool write_attrs = false;
+		int target = 0;
 
 		size_t argidx;
 		for (argidx = 1; argidx < args.size(); argidx++) {
 			if (args[argidx] == "-quiet")
 				quiet = true;
+			else if (args[argidx] == "-target" && argidx + 1 < args.size())
+				target = atoi(args[++argidx].c_str());
 			else if (args[argidx] == "-write_attrs")
 				write_attrs = true;
 			else
@@ -59,8 +62,17 @@ struct LutdepthPass : Pass {
 				max_depth = std::max(max_depth, depth);
 			}
 
+			int module_target;
+			if (target && target >= max_depth) {
+				module_target = target;
+			} else {
+				if (target)
+					log_warning("User-specified depth target of %d unattainable\n", target);
+				module_target = max_depth;
+			}
+
 			for (auto cell : sort.sorted)
-				envelope[cell] = max_depth;
+				envelope[cell] = module_target;
 
 			for (auto it = sort.sorted.rbegin(); it != sort.sorted.rend(); it++) {
 				int depth = envelope[*it];

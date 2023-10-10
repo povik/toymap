@@ -857,6 +857,7 @@ struct LutrewritePass : Pass {
 		log_header(d, "Executing LUTREWRITE pass. (rewrite local patches of LUT network)\n");
 
 		std::string passdown_args = "";
+		std::string lutdepth_args = "";
 		size_t argidx;
 		for (argidx = 1; argidx < args.size(); argidx++) {
 			if (args[argidx] == "-lut" && argidx + 1 < args.size())
@@ -871,6 +872,8 @@ struct LutrewritePass : Pass {
 				passdown_args += stringf("-w %s ", args[++argidx].c_str());
 			else if (args[argidx] == "-shared")
 				passdown_args += "-shared ";
+			else if (args[argidx] == "-target" && argidx + 1 < args.size())
+				lutdepth_args += stringf(" -target %s", args[++argidx].c_str());
 			else
 				break;
 		}
@@ -879,7 +882,7 @@ struct LutrewritePass : Pass {
 		while (true) {
 			d->scratchpad_unset("opt.did_something");
 
-			Pass::call(d, "lutdepth -write_attrs");
+			Pass::call(d, "lutdepth -write_attrs" + lutdepth_args);
 			Pass::call(d, stringf("lutrewrite_once %s", passdown_args.c_str()));
 			Pass::call(d, "opt_clean");
 
