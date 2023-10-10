@@ -205,6 +205,7 @@ struct LutNetwork {
 	void import(SigMap &sigmap, dict<SigBit, Cell *> lut_drivers,
 				SigSpec leaves, SigSpec outputs)
 	{
+		// TODO: shared LUTs
 		pool<SigBit> frontier(outputs.bits().begin(), outputs.bits().end());
 		pool<SigBit> leaves_pool(leaves.bits().begin(), leaves.bits().end());
 		std::vector<Cell *> cell_sequence;
@@ -453,9 +454,9 @@ std::vector<Fragment> find_fragments(ThruthTable &table, int bn)
 	return found;
 }
 
-#define LUT_SIZE 4
-
 static bool search_shared = false;
+static int lut_size = 4;
+static int lut_min = 3;
 
 void implement_varchoices(ThruthTable table, std::vector<int> vars, LutNetwork &net)
 {
@@ -465,9 +466,10 @@ void implement_varchoices(ThruthTable table, std::vector<int> vars, LutNetwork &
 
 	std::vector<std::pair<bool, int>> lut_inputs;
 
+	int bn = vars.front();
+
 	auto sep = std::find(vars.begin(), vars.end(), -1);
-	for (auto it = (log2 <= LUT_SIZE) ? vars.begin() : sep - LUT_SIZE;
-			it != sep; it++) {
+	for (auto it = sep - bn; it != sep; it++) {
 		if (*it < net.ninputs) {
 			lut_inputs.push_back(std::make_pair(true, *it));
 		} else {
@@ -476,7 +478,7 @@ void implement_varchoices(ThruthTable table, std::vector<int> vars, LutNetwork &
 		}
 	}
 
-	if (log2 <= LUT_SIZE) {
+	if (sep == vars.end()) {
 		net.nodes.push_back(Lut{
 			NULL,
 			table.to_const(),
@@ -486,11 +488,11 @@ void implement_varchoices(ThruthTable table, std::vector<int> vars, LutNetwork &
 		return;
 	}
 
-	table.change_vars(std::vector<int>(vars.begin(), sep));
+	table.change_vars(std::vector<int>(vars.begin() + 1, sep));
 
-	int bn = LUT_SIZE, fn = log2 - bn;
+	int fn = log2 - bn;
 	std::vector<Fragment> fragments = find_fragments(table, bn);
-	log_assert(fragments.size() <= 4);
+	//log_assert(fragments.size() <= 1 << (bn - 1));
 	int nluts = ceil_log2(fragments.size());
 
 	// Find if there's a shared variable
@@ -606,19 +608,33 @@ void implement_varchoices(ThruthTable table, std::vector<int> vars, LutNetwork &
 	implement_varchoices(sub, std::vector<int>(sep + 1, vars.end()), net);
 }
 
-std::pair<std::vector<int>, int> explore_varchoices(ThruthTable table, int varcounter=-1)
+int min_nluts(int nvars, int arity)
+{
+	return (nvars + arity - 3) / (arity - 1);
+}
+
+std::pair<std::vector<int>, int> explore_varchoices(ThruthTable table, int budget, int bn=-1, int varcounter=-1)
 {
 	if (varcounter == -1)
 		varcounter = table.vars.size();
+	if (bn == -1)
+		bn = lut_size;
 
 	int nvars = table.vars.size();
 	log_assert(1 << nvars == table.values.size());
 	log_assert(1 << nvars == table.dontcares.size());
 
-	if (nvars <= LUT_SIZE)
-		return std::make_pair(table.vars, 1);
+	if (nvars <= lut_size) {
+		std::vector<int> ret;
+		ret.push_back(nvars);
+		ret.insert(ret.end(), table.vars.begin(), table.vars.end());
+		return std::make_pair(ret, 1);
+	}
 
-	int bn = LUT_SIZE, fn = nvars - bn;
+	if (budget <= 1)
+		return std::make_pair(std::vector<int>(), std::numeric_limits<int>::max());
+
+	int fn = nvars - bn;
 	int level = bn - 1;
 	std::vector<int> p(bn, 0);
 
@@ -626,35 +642,34 @@ std::pair<std::vector<int>, int> explore_varchoices(ThruthTable table, int varco
 	int best_nluts = std::numeric_limits<int>::max();
 
 	int niters = 1;
-	while (level >= 0) {
-		log_assert(level < p.size());
-		niters++;
-		table.swap(fn + level, p[level]);
-
+	while (true) {
 		std::vector<Fragment> fragments = find_fragments(table, bn);
-		if (fragments.size() <= 4) {
-			int nluts = ceil_log2(fragments.size());
+		int nluts = ceil_log2(fragments.size());
 
-			// Find if there's a shared variable
-			int shared;
-			for (shared = 0; shared < bn; shared++) {
-				int nhighs = 0, nlows = 0;
-				for (auto &frag : fragments) {
-					if (frag.bs_high & 1 << shared)
-						nhighs++;
-					if (frag.bs_low & 1 << shared)
-						nlows++;
-				}
-
-				if (nlows <= 1 << (nluts - 1) && nhighs <= 1 << (nluts - 1))
-					break;
+		// Find if there's a shared variable
+		int shared;
+		for (shared = 0; shared < bn; shared++) {
+			int nhighs = 0, nlows = 0;
+			for (auto &frag : fragments) {
+				if (frag.bs_high & 1 << shared)
+					nhighs++;
+				if (frag.bs_low & 1 << shared)
+					nlows++;
 			}
 
-			if (!search_shared || shared == bn)
-				shared = -1;
-			else
-				nluts -= 1;
+			if (nlows <= 1 << (nluts - 1) && nhighs <= 1 << (nluts - 1))
+				break;
+		}
 
+		if (!search_shared || shared == bn)
+			shared = -1;
+		else
+			nluts -= 1;
+
+		if (nluts + min_nluts(nvars - bn + nluts + (shared != -1), lut_size) > budget)
+			goto reject;
+
+		{
 			ThruthTable sub;
 			for (int i = 0; i < fn; i++)
 				sub.vars.push_back(table.vars[i]);
@@ -706,17 +721,31 @@ std::pair<std::vector<int>, int> explore_varchoices(ThruthTable table, int varco
 
 			int sub_nluts;
 			std::vector<int> sub_vars;
-			std::tie(sub_vars, sub_nluts) = explore_varchoices(sub, varcounter + nluts);
 
-			if (sub_nluts != std::numeric_limits<int>::max() &&
-					sub_nluts + nluts < best_nluts) {
-				best_nluts = sub_nluts + nluts;
-				best_vars.clear();
-				best_vars.insert(best_vars.end(), table.vars.begin(), table.vars.end());
-				best_vars.push_back(-1);
-				best_vars.insert(best_vars.end(), sub_vars.begin(), sub_vars.end());
+			for (int bn_sub = lut_min; bn_sub < lut_size; bn_sub++) {
+				std::tie(sub_vars, sub_nluts) = explore_varchoices(sub, budget - nluts, bn_sub, varcounter + nluts);
+
+				if (sub_nluts != std::numeric_limits<int>::max() &&
+						sub_nluts + nluts < best_nluts) {
+					best_nluts = sub_nluts + nluts;
+					best_vars.clear();
+					best_vars.push_back(bn);
+					best_vars.insert(best_vars.end(), table.vars.begin(), table.vars.end());
+					best_vars.push_back(-1);
+					best_vars.insert(best_vars.end(), sub_vars.begin(), sub_vars.end());
+				}
 			}
 		}
+
+
+	reject:
+
+		if (level < 0)
+			break;
+
+		log_assert(level < p.size());
+		niters++;
+		table.swap(fn + level, p[level]);
 
 		p[level]++;
 		if (p[level] == fn) {
@@ -736,15 +765,14 @@ struct LutrewriteOncePass : Pass {
 	{
 		log_header(d, "Executing LUTREWRITE_ONCE pass. (rewrite local patches of LUT network)\n");
 
-		int max_nluts = 20, max_nouterfans = 1, max_nleaves = 9,
-			lutsize = 4;
+		int max_nluts = 20, max_nouterfans = 1, max_nleaves = 9;
 		bool select_root = false;
 		float w_cutoff = 1.01;
 		search_shared = false;
 		size_t argidx;
 		for (argidx = 1; argidx < args.size(); argidx++) {
 			if (args[argidx] == "-lut" && argidx + 1 < args.size())
-				lutsize = atoi(args[++argidx].c_str());
+				lut_size = atoi(args[++argidx].c_str());
 			else if (args[argidx] == "-luts" && argidx + 1 < args.size())
 				max_nluts = atoi(args[++argidx].c_str());
 			else if (args[argidx] == "-outerfans" && argidx + 1 < args.size())
@@ -763,6 +791,9 @@ struct LutrewriteOncePass : Pass {
 		extra_args(args, argidx, d);
 
 		bool did_something = false;
+
+		uint64_t varexplr_sum = 0;
+		uint64_t pass_start = PerformanceTimer::query();
 
 		for (auto m : select_root ? d->selected_modules()
 						: d->selected_whole_modules_warn()) {
@@ -799,14 +830,24 @@ struct LutrewriteOncePass : Pass {
 
 				pm.ud_lut_cuts.root = root;
 
+				int saved_delta = 0;
+				SigSpec saved_leaves;
+				SigSpec saved_outerfans;
+				int saved_nluts;
+				float saved_ratio = -1;
+				std::vector<int> saved_vars;
+
 				pm.run_lut_cuts([&](){
 					auto const &st = pm.st_lut_cuts;
 					int nleaves = st.leaves.size();
 					int nouterfans = st.outerfans.size();
-					float weight = ((float) st.nluts - nouterfans + 1) / ((nleaves + lutsize - 3) / (lutsize - 1));
+					int old_nluts = st.nluts;
+					float weight = ((float) st.nluts - nouterfans + 1) / min_nluts(nleaves, lut_size);
 
 					if (weight < w_cutoff)
 						return;
+
+					uint64_t enum_start = PerformanceTimer::query();
 
 					ncuts++;
 
@@ -825,69 +866,105 @@ struct LutrewriteOncePass : Pass {
 					std::vector<int> new_vars;
 					int new_nluts;
 					auto table = old_net.thruth_table();
-					std::tie(new_vars, new_nluts) = explore_varchoices(table);
-					if (new_nluts < st.nluts) {
-						LutNetwork new_net;
-						new_net.ninputs = old_net.ninputs;
-						implement_varchoices(table, new_vars, new_net);
+					for (int bn = lut_min; bn <= lut_size; bn++) {
+						std::tie(new_vars, new_nluts) = explore_varchoices(table, old_nluts - 1, bn);
 
-						if (1) {
-							log_debug("W: %1.2f nluts: %d -> %d\n", weight, st.nluts, new_nluts);
-							std::string dump;
-							dump = old_net.dump_output();
-							log_debug("Old: %s\n", dump.c_str());
-							dump = new_net.dump_output();
-							log_debug("New: %s\n", dump.c_str());
+						if (new_nluts == std::numeric_limits<int>::max())
+							continue;
+
+						if (std::make_pair((float) old_nluts / (float) new_nluts, +old_nluts) > std::make_pair(saved_ratio, +saved_nluts)) {
+							saved_delta = old_nluts - new_nluts;
+							saved_leaves = st.leaves;
+							saved_vars = new_vars;
+							saved_nluts = old_nluts;
+							saved_outerfans = st.outerfans.export_all();
+							saved_ratio = (float) old_nluts / (float) new_nluts;
 						}
-
-						int new_depth = -1;
-						if (root->attributes.count(ID(depth_envelope))) {
-							int envelope = root->attributes[ID(depth_envelope)].as_int();
-
-							dict<std::pair<bool, int>, int> depth_map;
-
-							for (int i = 0; i < nleaves; i++)
-							if (lut_drivers.count(st.leaves[i]) &&
-									lut_drivers.at(st.leaves[i])->attributes.count(ID(depth)))
-								depth_map[std::make_pair(true, i)] = lut_drivers[st.leaves[i]]->attributes[ID(depth)].as_int();
-
-							for (int i = 0; i < new_net.nodes.size(); i++) {
-								int depth = 1;
-								for (auto in : new_net.nodes[i].inputs)
-									depth = std::max(depth, depth_map[in] + 1);
-								depth_map[std::make_pair(false, i)] = depth;
-							}
-
-							new_depth = depth_map[std::make_pair(false, new_net.outs.front())];
-
-							if (new_depth > envelope) {
-								log_debug("Rejected due to depth\n");
-								return;
-							}
-						}
-
-						save += st.nluts - new_nluts;
-
-						log_assert(new_net.thruth_table() == old_net.thruth_table());
-						log_assert(new_net.nodes.size() == new_nluts);
-						// Wooo!
-
-						for (auto node : old_net.nodes)
-							pm.blacklist(node.cell);
-
-						SigBit y = root->getPort(ID::Y);
-						root->setPort(ID::Y, m->addWire(NEW_ID, 1));
-
-						m->connect(y, new_net.emit(m, st.leaves));
-						if (new_depth != -1)
-							new_net.nodes.back().cell->attributes[ID(depth)] = new_depth;
-						lut_drivers[pm.sigmap(y)] = new_net.nodes.back().cell;
-						did_something = true;
 					}
+
+					uint64_t enum_end = PerformanceTimer::query();
+
+					varexplr_sum += (enum_end - enum_start);
 				});
+
+
+				if (saved_delta > 0) {
+					int nleaves = saved_leaves.size();
+
+					LutNetwork old_net;
+					old_net.import(pm.sigmap, lut_drivers, saved_leaves, saved_outerfans);
+					auto table = old_net.thruth_table();
+
+					LutNetwork new_net;
+					new_net.ninputs = old_net.ninputs;
+					implement_varchoices(table, saved_vars, new_net);
+
+					// FIXME: bad accounting of shared LUTs due to import code
+					//int old_nluts = old_net.nodes.size();
+					int old_nluts = saved_nluts;
+					int new_nluts = new_net.nodes.size();
+
+					if (1) {
+						float weight = ((float) old_nluts - saved_outerfans.size() + 1) / ((nleaves + lut_size - 3) / (lut_size - 1));
+						log_debug("W: %1.2f nluts: %d -> %d\n", weight, old_nluts, new_nluts);
+						std::string dump;
+						dump = old_net.dump_output();
+						log_debug("Old: %s\n", dump.c_str());
+						dump = new_net.dump_output();
+						log_debug("New: %s\n", dump.c_str());
+					}
+
+					int new_depth = -1;
+					if (root->attributes.count(ID(depth_envelope))) {
+						int envelope = root->attributes[ID(depth_envelope)].as_int();
+
+						dict<std::pair<bool, int>, int> depth_map;
+
+						for (int i = 0; i < nleaves; i++)
+						if (lut_drivers.count(saved_leaves[i]) &&
+								lut_drivers.at(saved_leaves[i])->attributes.count(ID(depth)))
+							depth_map[std::make_pair(true, i)] = lut_drivers[saved_leaves[i]]->attributes[ID(depth)].as_int();
+
+						for (int i = 0; i < new_net.nodes.size(); i++) {
+							int depth = 1;
+							for (auto in : new_net.nodes[i].inputs)
+								depth = std::max(depth, depth_map[in] + 1);
+							depth_map[std::make_pair(false, i)] = depth;
+						}
+
+						new_depth = depth_map[std::make_pair(false, new_net.outs.front())];
+
+						if (new_depth > envelope) {
+							log_debug("Rejected due to depth\n");
+							continue;
+						}
+					}
+
+					save += saved_delta;
+
+					log_assert(new_net.thruth_table() == old_net.thruth_table());
+					log_assert(new_net.nodes.size() == new_nluts);
+					// Wooo!
+
+					for (auto node : old_net.nodes)
+						pm.blacklist(node.cell);
+
+					SigBit y = root->getPort(ID::Y);
+					root->setPort(ID::Y, m->addWire(NEW_ID, 1));
+
+					m->connect(y, new_net.emit(m, saved_leaves));
+					if (new_depth != -1)
+						new_net.nodes.back().cell->attributes[ID(depth)] = new_depth;
+					lut_drivers[pm.sigmap(y)] = new_net.nodes.back().cell;
+					did_something = true;
+				}
 			}
 
 			log("Visited %d cuts. Saved %d LUTs.\n", ncuts, save);
+
+			uint64_t overall = PerformanceTimer::query() - pass_start;
+			log_debug("Time spent overall %lld, in variable exploration %lld (%.1f %%)\n",
+					  overall, varexplr_sum, ((float) varexplr_sum) * 100 / ((float) overall));
 		}
 
 		if (did_something)
