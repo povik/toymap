@@ -1,3 +1,5 @@
+#include <bit>
+
 #include "kernel/register.h"
 #include "kernel/utils.h"
 #include "kernel/rtlil.h"
@@ -284,6 +286,49 @@ struct LutNetwork {
 			return stringf("%c", 'a' + index);
 		} else {
 			auto &node = nodes[index];
+
+			if (node.inputs.size() <= 6) {
+				uint64_t l = 0;
+				int i = 0;
+				for (auto bit : node.lut) {
+					if (bit != State::S0)
+						l |= 1 << i;
+					i++;
+				}
+
+				if (l & (l - 1) == 0) {
+					int ctz = std::countr_zero(l);
+					int ninput = 0;
+					std::string ret;
+					for (auto input : node.inputs) {
+						if (!ret.empty())
+							ret += "*";
+						if (!(ctz & (1 << ninput)))
+							ret += "!";
+						ret += dump(input);
+						ninput++;
+					}
+					return "(" + ret + ")";
+				}
+
+				l = ~l;
+
+				if (l & (l - 1) == 0) {
+					int ctz = std::countr_zero(l);
+					int ninput = 0;
+					std::string ret;
+					for (auto input : node.inputs) {
+						if (!ret.empty())
+							ret += "+";
+						if (ctz & (1 << ninput))
+							ret += "!";
+						ret += dump(input);
+						ninput++;
+					}
+					return "(" + ret + ")";
+				}
+			}
+
 			std::vector<bool> lut_binary;
 			for (auto bit : node.lut)
 				lut_binary.push_back(bit != State::S0);
