@@ -1004,6 +1004,10 @@ struct LutrewritePass : Pass {
 		while (true) {
 			d->scratchpad_unset("opt.did_something");
 
+			Pass::call(d, "opt_lut");
+			Pass::call(d, "opt_lut_ins");
+			Pass::call(d, "opt_lut");
+			Pass::call(d, "opt_clean");
 			Pass::call(d, "lutdepth -write_attrs" + lutdepth_args);
 			Pass::call(d, stringf("lutrewrite_once %s", passdown_args.c_str()));
 			Pass::call(d, "opt_clean");

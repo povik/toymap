@@ -15,7 +15,7 @@ proc lutdepth {} {
 	return $stat
 }
 
-proc bench {name extra} {
+proc bench {name extra4 extra6} {
 	read_aiger -module_name top "benchmarks/$name"
 	design -save aig
 
@@ -30,16 +30,19 @@ proc bench {name extra} {
 	set abc_depth4 [lutdepth]
 
 	design -load aig
-	toymap -lut 6 -balance -depth_cuts -emit_luts {*}$extra
+	toymap -lut 6 -balance -depth_cuts -emit_luts {*}$extra6
+	opt_lut
+	lutrewrite -lut 6 -leaves 10 {*}$extra6
+	lutrewrite -lut 6 -shared -leaves 10 {*}$extra6
 	opt_lut
 	set toymap_area6 [lutarea]
 	set toymap_depth6 [lutdepth]
 
 	design -load aig
-	toymap -lut 4 -balance -depth_cuts -emit_luts {*}$extra
+	toymap -lut 4 -balance -depth_cuts -emit_luts {*}$extra4
 	opt_lut
-	lutrewrite
-	lutrewrite -shared
+	lutrewrite -lut 4 {*}$extra4
+	lutrewrite -lut 4 -shared {*}$extra4
 	opt_lut
 	set toymap_area4 [lutarea]
 	set toymap_depth4 [lutdepth]
@@ -48,7 +51,10 @@ proc bench {name extra} {
 	abc -g aig
 	aigmap
 	opt_clean
-	toymap -lut 6 -balance -depth_cuts -emit_luts {*}$extra
+	toymap -lut 6 -balance -depth_cuts -emit_luts {*}$extra6
+	opt_lut
+	lutrewrite -lut 6 -leaves 10 -lut 6 {*}$extra6
+	lutrewrite -lut 6 -shared -leaves 10 -lut 6 {*}$extra6
 	opt_lut
 	set abc_toymap_area6 [lutarea]
 	set abc_toymap_depth6 [lutdepth]
@@ -57,10 +63,10 @@ proc bench {name extra} {
 	abc -g aig
 	aigmap
 	opt_clean
-	toymap -lut 4 -balance -depth_cuts -emit_luts {*}$extra
+	toymap -lut 4 -balance -depth_cuts -emit_luts {*}$extra4
 	opt_lut
-	lutrewrite
-	lutrewrite -shared
+	lutrewrite -lut 4 {*}$extra4
+	lutrewrite -lut 4 -shared {*}$extra4
 	opt_lut
 	set abc_toymap_area4 [lutarea]
 	set abc_toymap_depth4 [lutdepth]
@@ -71,30 +77,31 @@ proc bench {name extra} {
 	set p4 "$abc_area6 | $toymap_area6 | [format "%.1f" [expr (100.0 * $toymap_area6 / $abc_area6)]]%"
 	set p5 "$abc_toymap_area6 | [format "%.1f" [expr (100.0 * $abc_toymap_area6 / $abc_area6)]]%"
 	set p6 "$abc_depth6 | $toymap_depth6 | $abc_toymap_depth6"
-	puts stdout "$name | $p1 | $p2 | $p3 | $p4 | $p5 | $p6 | $extra"
+	puts stdout "$name | $p1 | $p2 | $p3 | $p4 | $p5 | $p6 | $extra4 | $extra6"
 
 	design -reset
 	design -delete aig
 }
 
-bench "arithmetic/adder.aig" {}
-bench "arithmetic/bar.aig" {}
-bench "arithmetic/div.aig" {}
-bench "arithmetic/hyp.aig" {}
-bench "arithmetic/log2.aig" {}
-bench "arithmetic/max.aig" {}
-bench "arithmetic/multiplier.aig" {}
-bench "arithmetic/sin.aig" {}
-bench "arithmetic/sqrt.aig" {}
-bench "arithmetic/square.aig" {}
+bench "arithmetic/adder.aig" {} {}
+bench "arithmetic/bar.aig" {} {}
+bench "arithmetic/div.aig" {} {}
+bench "arithmetic/hyp.aig" {} {}
+bench "arithmetic/log2.aig" {} {}
+bench "arithmetic/max.aig" {} {}
+bench "arithmetic/multiplier.aig" {} {}
+bench "arithmetic/sin.aig" {} {}
+bench "arithmetic/sqrt.aig" {} {}
+bench "arithmetic/square.aig" {} {}
 
-bench "random_control/arbiter.aig" {}
-bench "random_control/cavlc.aig" {}
-bench "random_control/ctrl.aig" {}
-bench "random_control/dec.aig" {}
-bench "random_control/i2c.aig" {}
-bench "random_control/int2float.aig" {}
-bench "random_control/mem_ctrl.aig" {}
-bench "random_control/priority.aig" {}
-bench "random_control/router.aig" {}
-bench "random_control/voter.aig" {}
+bench "random_control/arbiter.aig" {} {}
+bench "random_control/cavlc.aig" {} {}
+bench "random_control/ctrl.aig" {} {}
+bench "random_control/dec.aig" {} {}
+bench "random_control/i2c.aig" {} {}
+bench "random_control/int2float.aig" {} {}
+bench "random_control/mem_ctrl.aig" {} {}
+bench "random_control/priority.aig" {} {}
+bench "random_control/priority.aig" {-target 43} {}
+bench "random_control/router.aig" {} {}
+bench "random_control/voter.aig" {} {}

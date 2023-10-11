@@ -1706,6 +1706,8 @@ struct ToymapPass : Pass {
 				no_exact_area = true;
 			else if (args[argidx] == "-lut" && argidx + 1 < args.size())
 				lut = atoi(args[++argidx].c_str());
+			else if (args[argidx] == "-target" && argidx + 1 < args.size())
+				++argidx;
 			else if (args[argidx][0] == '-')
 				commands.push_back(args[argidx]);
 			else
