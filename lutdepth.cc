@@ -85,6 +85,7 @@ struct LutdepthPass : Pass {
 			for (auto cell : sort.sorted) {
 				cell->attributes[ID(depth)] = depths[cell];
 				cell->attributes[ID(depth_envelope)] = envelope[cell];
+				cell->set_bool_attribute(ID(critical), depths[cell] == envelope[cell]);
 			}
 
 			if (!quiet)
