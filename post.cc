@@ -801,6 +801,7 @@ struct LutrewriteOncePass : Pass {
 			pm.setup(m->cells());
 			dict<SigBit, Cell *> lut_drivers;
 			for (auto cell : m->cells())
+			if (cell->type == ID($lut))
 				lut_drivers[pm.sigmap(cell->getPort(ID::Y))] = cell;
 
 			pm.ud_lut_cuts.max_nluts = max_nluts;
