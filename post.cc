@@ -78,7 +78,7 @@ struct LutnotPass : Pass {
 				if (foreign_bits.check(a_bit) || !lut_driver.count(a_bit))
 					continue;
 
-				log_debug("Absorbing _NOT_ cell %s driving %s",
+				log_debug("Absorbing _NOT_ cell %s driving %s\n",
 						  log_id(cell->name), log_signal(y_bit));
 
 				Cell *driver = lut_driver.at(a_bit);
