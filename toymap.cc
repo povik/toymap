@@ -1577,8 +1577,6 @@ struct Network {
 		// reference counts if the selected cut on a node that is part of the mapping changes.
 		walk_mapping(lib);
 
-		// Call `walk_mapping()` again to print the current area
-		walk_mapping(lib);
 		log("Mapping: Performing area recovery\n");
 
 		spread_depth_limit(target_depth);
