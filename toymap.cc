@@ -18,6 +18,8 @@
 #include "kernel/log.h"
 #include "kernel/ff.h"
 
+#include "library.h"
+
 template<> struct Yosys::hash_ops<uint64_t> : hash_int_ops
 {
 	static inline unsigned int hash(uint64_t a) {
@@ -30,6 +32,7 @@ namespace RTLIL = Yosys::RTLIL;
 using Yosys::dict;
 using Yosys::log;
 using Yosys::log_error;
+using Yosys::log_warning;
 using Yosys::log_id;
 using Yosys::ys_debug;
 using Yosys::State;
@@ -508,7 +511,6 @@ struct Network {
 	std::vector<AndNode*> nodes;
 	bool impure_module = false;
 	int frontier_size = 0;
-	int max_cut = 0;
 	bool no_exact_area = false;
 
 	Network() {}
@@ -523,7 +525,6 @@ struct Network {
 
 		impure_module = other.impure_module;
 		frontier_size = other.frontier_size;
-		max_cut = other.max_cut;
 		no_exact_area = other.no_exact_area;
 	}
 
@@ -884,7 +885,7 @@ struct Network {
 		log("Frontier is %d wide at its peak\n", frontier_size);
 	}
 
-	int walk_mapping(bool verbose=false)
+	int walk_mapping(const LutLibrary &lib, bool verbose=false)
 	{
 		for (auto it = nodes.rbegin(); it != nodes.rend(); it++) {
 			AndNode *node = *it;
@@ -908,13 +909,13 @@ struct Network {
 			if (node->pi || node->po)
 				continue;
 			if (node->map_fanouts)
-				area++;
+				area += lib.lookup(CutList(node->cut).size).cost;
 			if (node->map_fanouts == 1)
 				support_area++;
 		}
 
 		if (verbose)
-			log("Mapping: Area is %d nodes (of those %d are single-fanout)\n",
+			log("Mapping: Area is %d (of this %d nodes are single-fanout)\n",
 				area, support_area);
 
 		return area;
@@ -1124,7 +1125,8 @@ struct Network {
 				node->cut[pos].img = NULL;
 		}
 
-		walk_mapping();
+		LutLibrary lib = LutLibrary::academic_luts(2);
+		walk_mapping(lib);
 	}
 
 	static void deref_cut(AndNode *node)
@@ -1152,10 +1154,18 @@ struct Network {
 	}
 
 	template<typename CutEvaluation>
-	void cuts(bool consider_previous_cut=true, bool late_reject=false)
+	void cuts(LutLibrary &lib, bool consider_previous_cut=true, bool late_reject=false)
 	{
-		log_assert(max_cut <= CUT_MAXIMUM);
 		log_assert(CUT_MAXIMUM >= 3);
+
+		int max_cut;
+		if (lib.max_width() > CUT_MAXIMUM) {
+			log_warning("LUTs wider than %d are ignored as mapping targets.\n", CUT_MAXIMUM);
+			max_cut = CUT_MAXIMUM;
+		} else {
+			max_cut = lib.max_width();
+		}
+
 		struct NodeCache {
 			int ps_len;
 			struct PriorityCut {
@@ -1220,10 +1230,10 @@ struct Network {
 
 			if (consider_previous_cut) {
 				lcache->ps_len++;
-				log_assert(!CutEvaluation(CutList(node->cut), node).reject(node));
+				log_assert(!CutEvaluation(lib, CutList(node->cut), node).reject(node));
 				std::copy(node->cut, node->cut + CUT_MAXIMUM, lcache->ps[0].cut);
 				leaderboard[
-					std::make_pair(CutEvaluation(CutList(node->cut), node),
+					std::make_pair(CutEvaluation(lib, CutList(node->cut), node),
 								   std::numeric_limits<int>::max())] = 0;
 				log_assert(!leaderboard.empty());
 			}
@@ -1251,7 +1261,7 @@ struct Network {
 				if (cutlen < CUT_MAXIMUM)
 					working_cut[cutlen] = CoverNode{0, NULL};
 
-				auto working_eval = std::make_pair(CutEvaluation(CutList(working_cut), node), hash);
+				auto working_eval = std::make_pair(CutEvaluation(lib, CutList(working_cut), node), hash);
 
 				if ((!late_reject && working_eval.first.reject(node))
 						|| leaderboard.count(working_eval))
@@ -1308,7 +1318,7 @@ struct Network {
 		delete[] cache;
 
 		if (true)
-			log("%4s A=%6d\n", CutEvaluation::prefix(), walk_mapping());
+			log("%4s A=%6d\n", CutEvaluation::prefix(), walk_mapping(lib));
 
 	}
 
@@ -1318,7 +1328,7 @@ struct Network {
 		double area_flow;
 		int edge_flow;
 
-		DepthEval(CutList cutlist, AndNode *node, bool area_flow2=false)
+		DepthEval(LutLibrary &lib, CutList cutlist, AndNode *node, bool area_flow2=false)
 		{
 			depth = 0;
 			cut_width = 0;
@@ -1330,7 +1340,7 @@ struct Network {
 			if (area_flow2) {
 				area_flow = compute_area_flow(cutlist, node);
 			} else {
-				area_flow = 1;
+				area_flow = lib.lookup(cutlist.size).cost;
 				for (auto cut_node : cutlist)
 					area_flow += cut_node.img->area_flow;
 				area_flow /= std::max(1, node->map_fanouts);
@@ -1397,10 +1407,10 @@ struct Network {
 	};
 
 	struct DepthEvalInitial : public DepthEval {
-		DepthEvalInitial(CutList cutlist, AndNode *node)
-			: DepthEval(cutlist, node, false)
+		DepthEvalInitial(LutLibrary &lib, CutList cutlist, AndNode *node)
+			: DepthEval(lib, cutlist, node, false)
 		{
-			area_flow = 1;
+			area_flow = lib.lookup(cutlist.size).cost;;
 			for (auto cut_node : cutlist)
 				area_flow += cut_node.img->area_flow;
 			area_flow /= std::max(1, node->fanouts);
@@ -1414,7 +1424,8 @@ struct Network {
 	};
 
 	struct DepthEvalInitial2 : public DepthEvalInitial {
-		DepthEvalInitial2(CutList cutlist, AndNode *node) : DepthEvalInitial(cutlist, node) {}
+		DepthEvalInitial2(LutLibrary &lib, CutList cutlist, AndNode *node)
+				: DepthEvalInitial(lib, cutlist, node) {}
 		bool operator<(const DepthEvalInitial2 other) const
 			{ return std::tie(depth, area_flow, edge_flow, cut_width)
 						< std::tie(other.depth, other.area_flow, other.edge_flow, other.cut_width); }
@@ -1423,7 +1434,8 @@ struct Network {
 	};
 
 	struct AreaEvalInitial : public DepthEvalInitial {
-		AreaEvalInitial(CutList cutlist, AndNode *node) : DepthEvalInitial(cutlist, node) {}
+		AreaEvalInitial(LutLibrary &lib, CutList cutlist, AndNode *node)
+				: DepthEvalInitial(lib, cutlist, node) {}
 		bool operator<(const AreaEvalInitial other) const
 			{ return std::tie(area_flow, edge_flow, cut_width, depth)
 						< std::tie(other.area_flow, other.edge_flow, other.cut_width, other.depth); }
@@ -1433,8 +1445,8 @@ struct Network {
 
 	struct AreaFlowEval : public DepthEval {
 		int fanin_refs;
-		AreaFlowEval(CutList cutlist, AndNode *node)
-				: DepthEval(cutlist, node) {}
+		AreaFlowEval(LutLibrary &lib, CutList cutlist, AndNode *node)
+				: DepthEval(lib, cutlist, node) {}
 		bool operator<(const AreaFlowEval other) const
 			{ return std::tie(area_flow, edge_flow, cut_width, depth)
 						< std::tie(other.area_flow, other.edge_flow, other.cut_width, other.depth); }
@@ -1444,12 +1456,28 @@ struct Network {
 
 	struct ExactAreaEval : public AreaFlowEval {
 		int exact_area;
-		ExactAreaEval(CutList cutlist, AndNode *node)
-				: AreaFlowEval(cutlist, node) {
-			exact_area = calc_exact_area(cutlist, node);
+		ExactAreaEval(LutLibrary &lib, CutList cutlist, AndNode *node)
+				: AreaFlowEval(lib, cutlist, node) {
+			exact_area = calc_exact_area(lib, cutlist, node);
 		}
 
-		static int calc_exact_area(CutList cutlist, AndNode *node) {
+		static int ref_cut(LutLibrary &lib, AndNode *node)
+		{
+			if (node->pi)
+				return 0;
+
+			CutList cutlist(node->cut);
+			int sum = lib.lookup(cutlist.size).cost;
+			for (auto cut_node : cutlist) {
+				log_assert(cut_node.img != node);
+				if (!cut_node.img->map_fanouts++)
+					sum += ref_cut(lib, cut_node.img);
+				log_assert(cut_node.img->map_fanouts >= 1);
+			}
+			return sum;
+		}
+
+		static int calc_exact_area(LutLibrary &lib, CutList cutlist, AndNode *node) {
 			if (node->pi)
 				return 0;
 			int ret;
@@ -1457,17 +1485,17 @@ struct Network {
 			if (node->map_fanouts)
 				deref_cut(node);
 
-			ret = 1;
+			ret = lib.lookup(cutlist.size).cost;
 			for (auto cut_node : cutlist)
 			if (!cut_node.img->map_fanouts++)
-				ret += 1 + ref_cut(cut_node.img);
+				ret += ref_cut(lib, cut_node.img);
 
 			for (auto cut_node : cutlist)
 			if (!--cut_node.img->map_fanouts)
 				deref_cut(cut_node.img);
 
 			if (node->map_fanouts)
-				ref_cut(node);
+				ref_cut(lib, node);
 
 			return ret;
 		}
@@ -1506,8 +1534,13 @@ struct Network {
 		}
 	}
 
-	void depth_cuts()
+	void depth_cuts(LutLibrary &lib)
 	{
+		// We don't support non-unit delays for now
+		for (auto &v : lib.varieties)
+		for (auto d : v.delays)
+			log_assert(d == 1);
+
 		tsort();
 		frontier();
 		fanouts();
@@ -1521,7 +1554,7 @@ struct Network {
 			node->depth_limit = std::numeric_limits<int>::max();
 		}
 
-		cuts<DepthEvalInitial>(false);
+		cuts<DepthEvalInitial>(lib, false);
 
 		int target_depth = 0;
 		for (auto node : nodes)
@@ -1531,10 +1564,10 @@ struct Network {
 		log("Mapping: Depth will be %d\n", target_depth);
 		spread_depth_limit(target_depth);
 
-		cuts<DepthEvalInitial2>(false, true);
+		cuts<DepthEvalInitial2>(lib, false, true);
 		spread_depth_limit(target_depth);
-		
-		cuts<AreaEvalInitial>(false, true);
+
+		cuts<AreaEvalInitial>(lib, false, true);
 		spread_depth_limit(target_depth);
 
 		// `map_fanouts` is a reference counter on each AIG node for the number of times
@@ -1542,25 +1575,25 @@ struct Network {
 		// (and therefore the mapping) have been selected, we need to walk the mapping once to
 		// set the initial reference counts. Subsequent calls to `cuts<>()` will update the
 		// reference counts if the selected cut on a node that is part of the mapping changes.
-		walk_mapping();
+		walk_mapping(lib);
 
 		// Call `walk_mapping()` again to print the current area
-		walk_mapping();
+		walk_mapping(lib);
 		log("Mapping: Performing area recovery\n");
 
 		spread_depth_limit(target_depth);
-		cuts<AreaFlowEval>();
+		cuts<AreaFlowEval>(lib);
 
 		if (!no_exact_area) {
 			spread_depth_limit(target_depth);
-			cuts<ExactAreaEval>();
+			cuts<ExactAreaEval>(lib);
 			spread_depth_limit(target_depth);
-			cuts<ExactAreaEval>();
+			cuts<ExactAreaEval>(lib);
 		}
 
 		// Walk the mapping once more to (1) check the `map_fanouts` counters for consistence;
 		// and (2) print out the final mapping area.
-		walk_mapping(true);
+		walk_mapping(lib, true);
 	}
 
 	void dump_cuts()
@@ -1715,11 +1748,12 @@ struct ToymapPass : Pass {
 		}
 		extra_args(args, argidx, d);
 
+		LutLibrary lib = LutLibrary::academic_luts(lut);
+
 		for (auto m : d->selected_whole_modules_warn()) {
 			log("Working on module %s\n", m->name.c_str());
 
 			Network net;
-			net.max_cut = lut;
 			net.no_exact_area = no_exact_area;
 			net.yosys_import(m, import_ff);
 			bool emitted = false;
@@ -1727,7 +1761,7 @@ struct ToymapPass : Pass {
 			for (auto cmd : commands) {
 				if      (cmd == "-trivial_cuts")  net.trivial_cuts();
 				else if (cmd == "-scramble_lag")  net.scramble_lag();
-				else if (cmd == "-depth_cuts")    net.depth_cuts();
+				else if (cmd == "-depth_cuts")    net.depth_cuts(lib);
 				else if (cmd == "-dump_cuts")     net.dump_cuts();
 				else if (cmd == "-unique")        net.unique();
 				else if (cmd == "-balance")		  net.balance();
