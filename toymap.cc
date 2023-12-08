@@ -511,7 +511,6 @@ struct Network {
 	std::vector<AndNode*> nodes;
 	bool impure_module = false;
 	int frontier_size = 0;
-	bool no_exact_area = false;
 
 	Network() {}
 	~Network() {
@@ -525,7 +524,6 @@ struct Network {
 
 		impure_module = other.impure_module;
 		frontier_size = other.frontier_size;
-		no_exact_area = other.no_exact_area;
 	}
 
 	void yosys_import(RTLIL::Module *m, bool import_ff=false)
@@ -1581,13 +1579,10 @@ struct Network {
 
 		spread_depth_limit(target_depth);
 		cuts<AreaFlowEval>(lib);
-
-		if (!no_exact_area) {
-			spread_depth_limit(target_depth);
-			cuts<ExactAreaEval>(lib);
-			spread_depth_limit(target_depth);
-			cuts<ExactAreaEval>(lib);
-		}
+		spread_depth_limit(target_depth);
+		cuts<ExactAreaEval>(lib);
+		spread_depth_limit(target_depth);
+		cuts<ExactAreaEval>(lib);
 
 		// Walk the mapping once more to (1) check the `map_fanouts` counters for consistence;
 		// and (2) print out the final mapping area.
@@ -1706,7 +1701,6 @@ struct ToymapPass : Pass {
 		log("        -lut N       set maximum LUT arity to N\n");
 		log("        -depth_cuts  find mapping by selecting depth-minimizing cuts\n");
 		log("                     followed by passes of area recovery\n");
-		log("        -no_exact_area  disable exact area pass in area recovery\n");
 		log("        -emit_luts   emit LUT mapping\n");
 		log("        -emit_gate2  emit 2-input gate mapping\n");
 		log("\n");
@@ -1728,13 +1722,10 @@ struct ToymapPass : Pass {
 		size_t argidx;
 
 		bool import_ff = false;
-		bool no_exact_area = false;
 		int lut = 4;
 		for (argidx = 1; argidx < args.size(); argidx++) {
 			if (args[argidx] == "-ff")
 				import_ff = true;
-			if (args[argidx] == "-no_exact_area")
-				no_exact_area = true;
 			else if (args[argidx] == "-lut" && argidx + 1 < args.size())
 				lut = atoi(args[++argidx].c_str());
 			else if (args[argidx] == "-target" && argidx + 1 < args.size())
@@ -1752,7 +1743,6 @@ struct ToymapPass : Pass {
 			log("Working on module %s\n", m->name.c_str());
 
 			Network net;
-			net.no_exact_area = no_exact_area;
 			net.yosys_import(m, import_ff);
 			bool emitted = false;
 			bool lut_post = false;
